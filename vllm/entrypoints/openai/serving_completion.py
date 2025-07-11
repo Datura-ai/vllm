@@ -577,7 +577,7 @@ class OpenAIServingCompletion(OpenAIServing):
             else:
                 step_token = step_top_logprobs[token_id]
 
-                token = self._get_raw_decoded_token(
+                token = self._get_decoded_token(
                     step_token,
                     token_id,
                     tokenizer,
@@ -595,7 +595,7 @@ class OpenAIServingCompletion(OpenAIServing):
                 out_top_logprobs.append({
                     # Convert float("-inf") to the
                     # JSON-serializable float that OpenAI uses
-                    self._get_raw_decoded_token(top_lp[1],
+                    self._get_decoded_token(top_lp[1],
                                             top_lp[0],
                                             tokenizer,
                                             return_as_token_id=should_return_as_token_id):
