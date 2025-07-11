@@ -35,7 +35,7 @@ def longest_word_sample(
     _, topk_indices = torch.topk(logits, k=top_k, dim=-1)  # [batch_size, top_k]
 
     # Get lengths for the top-k tokens
-    topk_lengths = token_lengths[topk_indices]  # [batch_size, top_k]
+    topk_lengths = token_lengths[torch.clamp(topk_indices, 0, token_lengths.size(0)-1)]  # [batch_size, top_k]
 
     # Find indices of longest tokens within each top-k set
     longest_indices_in_topk = torch.argmax(topk_lengths, dim=-1, keepdim=True)  # [batch_size, 1]
