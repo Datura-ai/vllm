@@ -93,7 +93,7 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
         tokenizer_revision=model_config.tokenizer_revision,
     )
 
-    vocab_size = tokenizer.vocab_size
+    vocab_size = len(tokenizer)
     token_lengths = torch.zeros(vocab_size, dtype=torch.int32)
     for token_id in tqdm(
         range(vocab_size), desc="Worker: Precomputing token lengths"
