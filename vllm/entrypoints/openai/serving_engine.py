@@ -982,6 +982,18 @@ class OpenAIServing:
             return logprob.decoded_token
         return tokenizer.decode(token_id)
 
+    @staticmethod
+    def _get_raw_decoded_token(logprob: Logprob,
+                           token_id: int,
+                           tokenizer: AnyTokenizer,
+                           return_as_token_id: bool = False) -> str:
+        # return `ĠEmily` instead of ` Emily`
+        if return_as_token_id:
+            return f"token_id:{token_id}"
+
+        return tokenizer.convert_ids_to_tokens([token_id])[0]
+
+
     def _is_model_supported(self, model_name: Optional[str]) -> bool:
         if not model_name:
             return True
