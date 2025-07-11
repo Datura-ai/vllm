@@ -19,7 +19,7 @@ from transformers import AutoTokenizer
 def longest_word_sample(
         logits: torch.Tensor,
         token_lengths: torch.Tensor,
-        top_k: int = 10
+        top_k: int = 5
 ) -> torch.Tensor:
     """
     Sample tokens by selecting the longest word from top-k candidates.
