@@ -85,6 +85,30 @@ else:
         "xgrammar.kernels.apply_token_bitmask_inplace_torch_compile")
 
 logger = init_logger(__name__)
+from transformers import AutoTokenizer
+
+def precompute_token_lengths(model_config) -> torch.Tensor:
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.tokenizer,
+        trust_remote_code=model_config.trust_remote_code,
+        tokenizer_revision=model_config.tokenizer_revision,
+    )
+
+    vocab_size = tokenizer.vocab_size
+    token_lengths = torch.zeros(vocab_size, dtype=torch.int32)
+    for token_id in tqdm(
+        range(vocab_size), desc="Worker: Precomputing token lengths"
+    ):
+        try:
+            token_str = tokenizer.decode(
+                [token_id],
+            )
+            token_lengths[token_id] = len(token_str)
+        except Exception:
+            token_lengths[token_id] = 0
+
+    return token_lengths
+
 
 
 class GPUModelRunner(LoRAModelRunnerMixin):
@@ -150,7 +174,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.encoder_cache_size = encoder_cache_size
 
         # Sampler
-        self.sampler = Sampler()
+        token_lengths_gpu = precompute_token_lengths(self.model_config).to(
+            self.device
+        )
+        self.sampler = Sampler(token_lengths_gpu=token_lengths_gpu)
 
         self.eplb_state: Optional[EplbState] = None
         """

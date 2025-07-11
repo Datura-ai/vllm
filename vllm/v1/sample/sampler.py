@@ -11,16 +11,50 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.ops.bad_words import apply_bad_words
 from vllm.v1.sample.ops.penalties import apply_all_penalties
 from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
+from tqdm import tqdm
+import torch
+from transformers import AutoTokenizer
+
+
+def longest_word_sample(
+        logits: torch.Tensor,
+        token_lengths: torch.Tensor,
+        top_k: int = 10
+) -> torch.Tensor:
+    """
+    Sample tokens by selecting the longest word from top-k candidates.
+
+    Args:
+        logits: Tensor of shape [batch_size, vocab_size]
+        token_lengths: Tensor of shape [vocab_size] with character lengths
+        top_k: Number of top candidates to consider
+
+    Returns:
+        Tensor of shape [batch_size] - selected token indices
+    """
+    _, topk_indices = torch.topk(logits, k=top_k, dim=-1)  # [batch_size, top_k]
+
+    # Get lengths for the top-k tokens
+    topk_lengths = token_lengths[topk_indices]  # [batch_size, top_k]
+
+    # Find indices of longest tokens within each top-k set
+    longest_indices_in_topk = torch.argmax(topk_lengths, dim=-1, keepdim=True)  # [batch_size, 1]
+
+    # Use gather to select the corresponding token indices
+    final_tokens = torch.gather(topk_indices, dim=-1, index=longest_indices_in_topk).squeeze(-1)  # [batch_size]
+
+    return final_tokens
 
 _SAMPLING_EPS = 1e-5
 
 
 class Sampler(nn.Module):
 
-    def __init__(self):
+    def __init__(self, token_lengths_gpu):
         super().__init__()
         self.topk_topp_sampler = TopKTopPSampler()
         self.pin_memory = is_pin_memory_available()
+        self.token_lengths_gpu = token_lengths_gpu
 
     def forward(
         self,
@@ -118,12 +152,13 @@ class Sampler(nn.Module):
             logits = processor.apply(logits)
 
         # Apply top_k and/or top_p.
-        random_sampled = self.topk_topp_sampler(
-            logits,
-            sampling_metadata.generators,
-            sampling_metadata.top_k,
-            sampling_metadata.top_p,
-        )
+        # random_sampled = self.topk_topp_sampler(
+        #     logits,
+        #     sampling_metadata.generators,
+        #     sampling_metadata.top_k,
+        #     sampling_metadata.top_p,
+        # )
+        random_sampled = longest_word_sample(logits, self.token_lengths_gpu)
 
         if greedy_sampled is None:
             return random_sampled
