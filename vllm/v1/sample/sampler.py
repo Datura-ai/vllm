@@ -32,6 +32,8 @@ def longest_word_sample(
     Returns:
         Tensor of shape [batch_size] - selected token indices
     """
+    vocab_size = logits.size(-1)
+    top_k = min(top_k, vocab_size)
     _, topk_indices = torch.topk(logits, k=top_k, dim=-1)  # [batch_size, top_k]
 
     # Get lengths for the top-k tokens
