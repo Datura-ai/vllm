@@ -1,3 +1,19 @@
+# how to run the vllm server on Cuda
+```
+pip install uv --break-system-packages
+uv venv --python 3.12 --seed
+source .venv/bin/activate
+
+git clone https://github.com/Datura-ai/vllm
+git checkout dev
+
+cd vllm
+VLLM_USE_PRECOMPILED=1 pip install --editable .
+
+vllm serve unsloth/Llama-3.2-3B-Instruct --dtype auto --host 0.0.0.0 --port 20000
+```
+
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">
