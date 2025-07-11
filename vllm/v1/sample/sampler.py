@@ -10,7 +10,10 @@ from vllm.v1.outputs import LogprobsTensors, SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.ops.bad_words import apply_bad_words
 from vllm.v1.sample.ops.penalties import apply_all_penalties
-from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
+from vllm.v1.sample.ops.topk_topp_sampler import (
+    TopKTopPSampler,
+    apply_top_k_top_p,
+)
 from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer
@@ -19,7 +22,7 @@ from transformers import AutoTokenizer
 def longest_word_sample(
         logits: torch.Tensor,
         token_lengths: torch.Tensor,
-        top_k: int = 5
+        top_k: int = 10
 ) -> torch.Tensor:
     """
     Sample tokens by selecting the longest word from top-k candidates.
@@ -37,6 +40,7 @@ def longest_word_sample(
     _, topk_indices = torch.topk(logits, k=top_k, dim=-1)  # [batch_size, top_k]
 
     # Get lengths for the top-k tokens
+
     topk_lengths = token_lengths[torch.clamp(topk_indices, 0, token_lengths.size(0)-1)]  # [batch_size, top_k]
 
     # Find indices of longest tokens within each top-k set
@@ -160,7 +164,13 @@ class Sampler(nn.Module):
         #     sampling_metadata.top_k,
         #     sampling_metadata.top_p,
         # )
-        random_sampled = longest_word_sample(logits, self.token_lengths_gpu)
+        filtered_logits = apply_top_k_top_p(
+            logits,
+            sampling_metadata.top_k,
+            sampling_metadata.top_p,
+        )
+
+        random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
 
         if greedy_sampled is None:
             return random_sampled
