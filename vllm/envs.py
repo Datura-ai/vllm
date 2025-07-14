@@ -138,6 +138,7 @@ if TYPE_CHECKING:
     VLLM_ROCM_QUICK_REDUCE_QUANTIZATION: str = "NONE"
     VLLM_ROCM_QUICK_REDUCE_CAST_BF16_TO_FP16: bool = True
     VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB: Optional[int] = None
+    VLLM_MIX_RATIO: float = 0.5
 
 
 def get_default_cache_root():
@@ -721,6 +722,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB":
     lambda: maybe_convert_int(
         os.environ.get("VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB", None)),
+    
+    # Mix ratio for longest word sampling - controls balance between 
+    # longest-word selection and random sampling (0.0 = pure random, 1.0 = pure longest)
+    "VLLM_MIX_RATIO":
+    lambda: float(os.getenv("VLLM_MIX_RATIO", "0.5")),
 
     # If set, when running in Quark emulation mode, do not dequantize the
     # weights at load time. Instead, dequantize weights on-the-fly during

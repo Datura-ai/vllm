@@ -5,6 +5,8 @@
 import torch
 import torch.nn as nn
 
+import vllm.envs as envs
+from vllm.logger import init_logger
 from vllm.utils import is_pin_memory_available
 from vllm.v1.outputs import LogprobsTensors, SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
@@ -17,41 +19,50 @@ from vllm.v1.sample.ops.topk_topp_sampler import (
 from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer
+import vllm.envs as envs
 
 
 def longest_word_sample(
         logits: torch.Tensor,
         token_lengths: torch.Tensor,
-        top_k: int = 10
+        top_k: int = 10,
+        mix_ratio: float = 0.5
 ) -> torch.Tensor:
     """
-    Sample tokens by selecting the longest word from top-k candidates.
+    Sample tokens by mixing longest word selection with probability-based sampling.
 
     Args:
         logits: Tensor of shape [batch_size, vocab_size]
         token_lengths: Tensor of shape [vocab_size] with character lengths
         top_k: Number of top candidates to consider
+        mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
 
     Returns:
         Tensor of shape [batch_size] - selected token indices
     """
     vocab_size = logits.size(-1)
     top_k = min(top_k, vocab_size)
-    _, topk_indices = torch.topk(logits, k=top_k, dim=-1)  # [batch_size, top_k]
+    
+    # Get top-k tokens and their probabilities
+    topk_probs, topk_indices = torch.topk(logits, k=top_k)
 
-    # Get lengths for the top-k tokens
+    # Get lengths for top-k tokens
+    topk_lengths = token_lengths[topk_indices]
 
-    topk_lengths = token_lengths[torch.clamp(topk_indices, 0, token_lengths.size(0)-1)]  # [batch_size, top_k]
+    # Normalize lengths to 0-1 range
+    normalized_lengths = topk_lengths / topk_lengths.max(dim=-1, keepdim=True)[0]
 
-    # Find indices of longest tokens within each top-k set
-    longest_indices_in_topk = torch.argmax(topk_lengths, dim=-1, keepdim=True)  # [batch_size, 1]
+    # Mix original probabilities with length preference
+    # mix_ratio=1.0 means 100% length-based, 0.0 means 100% probability-based
+    mixed_scores = (1 - mix_ratio) * topk_probs + mix_ratio * normalized_lengths
 
-    # Use gather to select the corresponding token indices
-    final_tokens = torch.gather(topk_indices, dim=-1, index=longest_indices_in_topk).squeeze(-1)  # [batch_size]
-
-    return final_tokens
+    # Select token with highest mixed score
+    best_idx = torch.argmax(mixed_scores, dim=-1)
+    return torch.gather(topk_indices, -1, best_idx.unsqueeze(-1)).squeeze(-1)
 
 _SAMPLING_EPS = 1e-5
+
+logger = init_logger(__name__)
 
 
 class Sampler(nn.Module):
@@ -61,6 +72,9 @@ class Sampler(nn.Module):
         self.topk_topp_sampler = TopKTopPSampler()
         self.pin_memory = is_pin_memory_available()
         self.token_lengths_gpu = token_lengths_gpu
+        self.mix_ratio = envs.VLLM_MIX_RATIO
+        logger.info(f"Sampler initialized with mix_ratio={self.mix_ratio} "
+                    f"(0.0=pure probability, 1.0=pure longest word)")
 
     def forward(
         self,
@@ -170,7 +184,12 @@ class Sampler(nn.Module):
             sampling_metadata.top_p,
         )
 
-        random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
+        random_sampled = longest_word_sample(
+            filtered_logits, 
+            self.token_lengths_gpu, 
+            top_k=sampling_metadata.top_k.max().item() if sampling_metadata.top_k is not None else 10,
+            mix_ratio=self.mix_ratio
+        )
 
         if greedy_sampled is None:
             return random_sampled
