@@ -13,6 +13,8 @@ VLLM_USE_PRECOMPILED=1 pip install --editable .
 vllm serve unsloth/Llama-3.2-3B-Instruct --dtype auto --host 0.0.0.0 --port 20000
 ```
 
+## Configs:
+VLLM_MIX_RATIO=0.5 #  (0.0=pure probability, 1.0=pure longest word)
 
 <p align="center">
   <picture>
