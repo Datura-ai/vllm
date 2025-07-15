@@ -139,7 +139,7 @@ if TYPE_CHECKING:
     VLLM_ROCM_QUICK_REDUCE_CAST_BF16_TO_FP16: bool = True
     VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB: Optional[int] = None
     VLLM_MIX_RATIO: float = 0.5
-    EOS_TOKEN_USAGE: bool = Tue
+    EOS_TOKEN_USAGE: bool = True
 
 
 def get_default_cache_root():
