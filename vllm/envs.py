@@ -139,6 +139,7 @@ if TYPE_CHECKING:
     VLLM_ROCM_QUICK_REDUCE_CAST_BF16_TO_FP16: bool = True
     VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB: Optional[int] = None
     VLLM_MIX_RATIO: float = 0.5
+    EOS_TOKEN_USAGE: bool = Tue
 
 
 def get_default_cache_root():
@@ -727,6 +728,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # longest-word selection and random sampling (0.0 = pure random, 1.0 = pure longest)
     "VLLM_MIX_RATIO":
     lambda: float(os.getenv("VLLM_MIX_RATIO", "0.5")),
+
+    "EOS_TOKEN_USAGE":
+    lambda: os.getenv("VLLM_EOS_TOKEN_USAGE", "true").lower() in ("1", "true"),
 
     # If set, when running in Quark emulation mode, do not dequantize the
     # weights at load time. Instead, dequantize weights on-the-fly during

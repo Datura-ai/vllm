@@ -87,7 +87,7 @@ else:
 logger = init_logger(__name__)
 from transformers import AutoTokenizer
 
-def precompute_token_lengths(model_config) -> torch.Tensor:
+def precompute_token_lengths(model_config) -> tuple[torch.Tensor, int]:
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.tokenizer,
         trust_remote_code=model_config.trust_remote_code,
@@ -107,7 +107,7 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
         except Exception:
             token_lengths[token_id] = 0
 
-    return token_lengths
+    return token_lengths, tokenizer.eos_token_id
 
 
 
@@ -174,10 +174,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.encoder_cache_size = encoder_cache_size
 
         # Sampler
-        token_lengths_gpu = precompute_token_lengths(self.model_config).to(
-            self.device
-        )
-        self.sampler = Sampler(token_lengths_gpu=token_lengths_gpu)
+        token_lengths_gpu, eos_token_id = precompute_token_lengths(self.model_config)
+        token_lengths_gpu.to(self.device)
+        self.sampler = Sampler(token_lengths_gpu=token_lengths_gpu, eos_token_id=eos_token_id)
 
         self.eplb_state: Optional[EplbState] = None
         """

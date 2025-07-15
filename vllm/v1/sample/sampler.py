@@ -19,23 +19,27 @@ from vllm.v1.sample.ops.topk_topp_sampler import (
 from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer
-import vllm.envs as envs
 
 
 def longest_word_sample(
         logits: torch.Tensor,
         token_lengths: torch.Tensor,
         top_k: int = 10,
-        mix_ratio: float = 0.5
+        mix_ratio: float = 0.5,
+        eos_token_id: int | None = None,
 ) -> torch.Tensor:
     """
     Sample tokens by mixing longest word selection with probability-based sampling.
+    
+    If eos_token_id is provided and present in top-k tokens, it will be prioritized
+    and selected immediately regardless of mix_ratio.
 
     Args:
         logits: Tensor of shape [batch_size, vocab_size]
         token_lengths: Tensor of shape [vocab_size] with character lengths
         top_k: Number of top candidates to consider
         mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
+        eos_token_id: If provided and present in top-k, this token will be selected
 
     Returns:
         Tensor of shape [batch_size] - selected token indices
@@ -58,7 +62,21 @@ def longest_word_sample(
 
     # Select token with highest mixed score
     best_idx = torch.argmax(mixed_scores, dim=-1)
-    return torch.gather(topk_indices, -1, best_idx.unsqueeze(-1)).squeeze(-1)
+    normal_selected = torch.gather(topk_indices, -1, best_idx.unsqueeze(-1)).squeeze(-1)
+    
+    # Check if EOS token is in top-k and prioritize it
+    if eos_token_id is not None:
+        # Create a mask for EOS token presence in top-k
+        eos_mask = topk_indices == eos_token_id
+        # Check if any batch has EOS token in top-k
+        has_eos = eos_mask.any(dim=-1)
+        
+        if has_eos.any():
+            # For batches with EOS token, use EOS token; for others, use normal selection
+            eos_token_indices = torch.full_like(has_eos, eos_token_id, dtype=torch.long)
+            return torch.where(has_eos, eos_token_indices, normal_selected)
+    
+    return normal_selected
 
 _SAMPLING_EPS = 1e-5
 
@@ -67,14 +85,19 @@ logger = init_logger(__name__)
 
 class Sampler(nn.Module):
 
-    def __init__(self, token_lengths_gpu):
+    def __init__(self, token_lengths_gpu, eos_token_id: int | None = None):
         super().__init__()
         self.topk_topp_sampler = TopKTopPSampler()
         self.pin_memory = is_pin_memory_available()
         self.token_lengths_gpu = token_lengths_gpu
         self.mix_ratio = envs.VLLM_MIX_RATIO
+        if envs.EOS_TOKEN_USAGE:
+            self.eos_token_id = eos_token_id
+        else:
+            logger.info("EOS token usage is disabled, setting eos_token_id to None.")
+            self.eos_token_id = None
         logger.info(f"Sampler initialized with mix_ratio={self.mix_ratio} "
-                    f"(0.0=pure probability, 1.0=pure longest word)")
+                    f"(0.0=pure probability, 1.0=pure longest word), {eos_token_id=}")
 
     def forward(
         self,
@@ -188,7 +211,8 @@ class Sampler(nn.Module):
             filtered_logits, 
             self.token_lengths_gpu, 
             top_k=sampling_metadata.top_k.max().item() if sampling_metadata.top_k is not None else 10,
-            mix_ratio=self.mix_ratio
+            mix_ratio=self.mix_ratio,
+            eos_token_id=self.eos_token_id,
         )
 
         if greedy_sampled is None:
