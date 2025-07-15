@@ -175,7 +175,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Sampler
         token_lengths_gpu, eos_token_id = precompute_token_lengths(self.model_config)
-        token_lengths_gpu.to(self.device)
+        token_lengths_gpu = token_lengths_gpu.to(self.device)
         self.sampler = Sampler(token_lengths_gpu=token_lengths_gpu, eos_token_id=eos_token_id)
 
         self.eplb_state: Optional[EplbState] = None
