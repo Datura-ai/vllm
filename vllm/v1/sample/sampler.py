@@ -80,7 +80,7 @@ def longest_word_sample(
             # Get token lengths for this batch
             batch_token_lengths = token_lengths[topk_idx[batch_idx].clamp_max(token_lengths.size(0) - 1)]
             
-            for i in range(k):
+            for i in range(10):
                 token_id = topk_idx[batch_idx, i].item()
                 logit_val = topk_logits[batch_idx, i].item()
                 length = batch_token_lengths[i].item()
@@ -121,7 +121,7 @@ class Sampler(nn.Module):
             logger.info("EOS token usage is disabled, setting eos_token_id to None.")
             self.eos_token_id = None
         logger.info(f"Sampler initialized with mix_ratio={self.mix_ratio} "
-                    f"(0.0=pure probability, 1.0=pure longest word), {eos_token_id=}")
+                    f"(0.0=pure probability, 1.0=pure longest word), {self.eos_token_id=}")
 
     def forward(
         self,
