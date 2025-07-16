@@ -8,8 +8,11 @@ git clone https://github.com/Datura-ai/vllm
 git checkout dev
 
 cd vllm
+
 VLLM_USE_PRECOMPILED=1 pip install --editable .
 
+export VLLM_EOS_TOKEN_USAGE=0
+export VLLM_MIX_RATIO=1 
 vllm serve unsloth/Llama-3.2-3B-Instruct --dtype auto --host 0.0.0.0 --port 20000
 ```
 

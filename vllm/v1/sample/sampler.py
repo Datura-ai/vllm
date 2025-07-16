@@ -91,7 +91,7 @@ class Sampler(nn.Module):
         self.pin_memory = is_pin_memory_available()
         self.token_lengths_gpu = token_lengths_gpu
         self.mix_ratio = envs.VLLM_MIX_RATIO
-        if envs.EOS_TOKEN_USAGE:
+        if envs.VLLM_EOS_TOKEN_USAGE:
             self.eos_token_id = eos_token_id
         else:
             logger.info("EOS token usage is disabled, setting eos_token_id to None.")

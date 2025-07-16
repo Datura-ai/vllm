@@ -103,7 +103,7 @@ def precompute_token_lengths(model_config) -> tuple[torch.Tensor, int]:
             token_str = tokenizer.decode(
                 [token_id],
             )
-            token_lengths[token_id] = len(token_str)
+            token_lengths[token_id] = len(token_str.strip())
         except Exception:
             token_lengths[token_id] = 0
 
