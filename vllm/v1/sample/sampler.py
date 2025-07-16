@@ -48,9 +48,9 @@ def longest_word_sample(
     # 2. Normalized scores
     prob_score = F.softmax(topk_logits, dim=-1)  # [B, k]
     length_score = F.softmax(
-        token_lengths[topk_idx.clamp_max(token_lengths.size(0) - 1)].float(),
+        token_lengths[topk_idx.clamp_max(token_lengths.size(0) - 1)].float() / 5,
         dim=-1,
-    )  # [B, k]
+    )
 
     # 3. Mix scores (formula is correct even if mix_ratio=0 or 1)
     mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
