@@ -66,37 +66,38 @@ def longest_word_sample(
             chosen,
         )
 
-    # Detailed logging for debugging
-    logger.info(f"--- [LOG: longest_word_sample] ---")
-    logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
-    logger.info(f"Detailed breakdown for each sequence in the batch:")
-    
-    batch_size = logits.size(0)
-    for batch_idx in range(batch_size):
-        logger.info(f"  [Sequence {batch_idx + 1}/{batch_size}]")
-        logger.info(f"    - Top-{k} candidates (ID, Logit, Length, Prob, Length_Score, Mixed_Score, Chosen):")
+    # Detailed logging for debugging - only when top_k==5
+    if top_k == 5:
+        logger.info(f"--- [LOG: longest_word_sample] ---")
+        logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
+        logger.info(f"Detailed breakdown for each sequence in the batch:")
         
-        # Get token lengths for this batch
-        batch_token_lengths = token_lengths[topk_idx[batch_idx].clamp_max(token_lengths.size(0) - 1)]
-        
-        for i in range(k):
-            token_id = topk_idx[batch_idx, i].item()
-            logit_val = topk_logits[batch_idx, i].item()
-            length = batch_token_lengths[i].item()
-            prob = prob_score[batch_idx, i].item()
-            len_score = length_score[batch_idx, i].item()
-            mixed = mix_score[batch_idx, i].item()
-            is_chosen = "<<< CHOSEN" if token_id == chosen[batch_idx].item() else ""
+        batch_size = logits.size(0)
+        for batch_idx in range(batch_size):
+            logger.info(f"  [Sequence {batch_idx + 1}/{batch_size}]")
+            logger.info(f"    - Top-{k} candidates (ID, Logit, Length, Prob, Length_Score, Mixed_Score, Chosen):")
             
-            logger.info(f"      - Candidate {i + 1:2d}: ID={token_id:5d}, Logit={logit_val:8.3f}, Length={length:2d}, Prob={prob:.3f}, Length_Score={len_score:.3f}, Mixed_Score={mixed:.3f} {is_chosen}")
+            # Get token lengths for this batch
+            batch_token_lengths = token_lengths[topk_idx[batch_idx].clamp_max(token_lengths.size(0) - 1)]
+            
+            for i in range(k):
+                token_id = topk_idx[batch_idx, i].item()
+                logit_val = topk_logits[batch_idx, i].item()
+                length = batch_token_lengths[i].item()
+                prob = prob_score[batch_idx, i].item()
+                len_score = length_score[batch_idx, i].item()
+                mixed = mix_score[batch_idx, i].item()
+                is_chosen = "<<< CHOSEN" if token_id == chosen[batch_idx].item() else ""
+                
+                logger.info(f"      - Candidate {i + 1:2d}: ID={token_id:5d}, Logit={logit_val:8.3f}, Length={length:2d}, Prob={prob:.3f}, Length_Score={len_score:.3f}, Mixed_Score={mixed:.3f} {is_chosen}")
+            
+            # Show decision logic
+            best_idx = best_in_topk[batch_idx].item()
+            logger.info(f"    - Decision: The best mixed_score is at index {best_idx} in the top-{k} list.")
+            logger.info(f"    - Result: Final chosen token ID = {chosen[batch_idx].item()}")
         
-        # Show decision logic
-        best_idx = best_in_topk[batch_idx].item()
-        logger.info(f"    - Decision: The best mixed_score is at index {best_idx} in the top-{k} list.")
-        logger.info(f"    - Result: Final chosen token ID = {chosen[batch_idx].item()}")
-    
-    logger.info(f"--- [End of log] ---")
-    logger.info("")
+        logger.info(f"--- [End of log] ---")
+        logger.info("")
 
     return chosen
 
