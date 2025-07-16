@@ -13,7 +13,7 @@ VLLM_USE_PRECOMPILED=1 pip install --editable .
 
 export VLLM_EOS_TOKEN_USAGE=0
 export VLLM_MIX_RATIO=1 
-vllm serve unsloth/Llama-3.2-3B-Instruct --dtype auto --host 0.0.0.0 --port 20000
+vllm serve unsloth/Llama-3.2-3B-Instruct --max_model_len 20000 --tokenizer tau-vision/llama-tokenizer-fix --dtype half --num-scheduler-steps 1 --enable-chunked-prefill --gpu-memory-utilization 0.95 --tensor-parallel-size 8 --port 20000
 ```
 
 ## Configs:
