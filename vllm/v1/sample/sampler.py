@@ -16,9 +16,7 @@ from vllm.v1.sample.ops.topk_topp_sampler import (
     TopKTopPSampler,
     apply_top_k_top_p,
 )
-from tqdm import tqdm
-import torch
-from transformers import AutoTokenizer
+import torch.nn.functional as F
 
 
 def longest_word_sample(
@@ -30,7 +28,7 @@ def longest_word_sample(
 ) -> torch.Tensor:
     """
     Sample tokens by mixing longest word selection with probability-based sampling.
-    
+
     If eos_token_id is provided and present in top-k tokens, it will be prioritized
     and selected immediately regardless of mix_ratio.
 
@@ -44,39 +42,64 @@ def longest_word_sample(
     Returns:
         Tensor of shape [batch_size] - selected token indices
     """
-    vocab_size = logits.size(-1)
-    top_k = min(top_k, vocab_size)
-    
-    # Get top-k tokens and their probabilities
-    topk_probs, topk_indices = torch.topk(logits, k=top_k)
+    k = min(top_k, logits.size(-1))
+    topk_logits, topk_idx = torch.topk(logits, k, dim=-1)  # [B, k]
 
-    # Get lengths for top-k tokens
-    topk_lengths = token_lengths[topk_indices]
+    # 2. Normalized scores
+    prob_score = F.softmax(topk_logits, dim=-1)  # [B, k]
+    length_score = F.softmax(
+        token_lengths[topk_idx.clamp_max(token_lengths.size(0) - 1)].float(),
+        dim=-1,
+    )  # [B, k]
 
-    # Normalize lengths to 0-1 range
-    normalized_lengths = topk_lengths / topk_lengths.max(dim=-1, keepdim=True)[0]
+    # 3. Mix scores (formula is correct even if mix_ratio=0 or 1)
+    mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
+    best_in_topk = mix_score.argmax(dim=-1, keepdim=True)  # [B, 1]
+    chosen = topk_idx.gather(-1, best_in_topk).squeeze(-1)  # [B]
 
-    # Mix original probabilities with length preference
-    # mix_ratio=1.0 means 100% length-based, 0.0 means 100% probability-based
-    mixed_scores = (1 - mix_ratio) * topk_probs + mix_ratio * normalized_lengths
-
-    # Select token with highest mixed score
-    best_idx = torch.argmax(mixed_scores, dim=-1)
-    normal_selected = torch.gather(topk_indices, -1, best_idx.unsqueeze(-1)).squeeze(-1)
-    
-    # Check if EOS token is in top-k and prioritize it
+    # 4. EOS has priority if it's in top-k with finite logit
     if eos_token_id is not None:
-        # Create a mask for EOS token presence in top-k
-        eos_mask = topk_indices == eos_token_id
-        # Check if any batch has EOS token in top-k
-        has_eos = eos_mask.any(dim=-1)
-        
-        if has_eos.any():
-            # For batches with EOS token, use EOS token; for others, use normal selection
-            eos_token_indices = torch.full_like(has_eos, eos_token_id, dtype=torch.long)
-            return torch.where(has_eos, eos_token_indices, normal_selected)
+        eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(topk_logits)
+        chosen = torch.where(
+            eos_in_topk.any(dim=-1),
+            torch.full_like(chosen, eos_token_id),
+            chosen,
+        )
+
+    # Detailed logging for debugging
+    logger.info(f"--- [LOG: longest_word_sample] ---")
+    logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
+    logger.info(f"Detailed breakdown for each sequence in the batch:")
     
-    return normal_selected
+    batch_size = logits.size(0)
+    for batch_idx in range(batch_size):
+        logger.info(f"  [Sequence {batch_idx + 1}/{batch_size}]")
+        logger.info(f"    - Top-{k} candidates (ID, Logit, Length, Prob, Length_Score, Mixed_Score, Chosen):")
+        
+        # Get token lengths for this batch
+        batch_token_lengths = token_lengths[topk_idx[batch_idx].clamp_max(token_lengths.size(0) - 1)]
+        
+        for i in range(k):
+            token_id = topk_idx[batch_idx, i].item()
+            logit_val = topk_logits[batch_idx, i].item()
+            length = batch_token_lengths[i].item()
+            prob = prob_score[batch_idx, i].item()
+            len_score = length_score[batch_idx, i].item()
+            mixed = mix_score[batch_idx, i].item()
+            is_chosen = "<<< CHOSEN" if token_id == chosen[batch_idx].item() else ""
+            
+            logger.info(f"      - Candidate {i + 1:2d}: ID={token_id:5d}, Logit={logit_val:8.3f}, Length={length:2d}, Prob={prob:.3f}, Length_Score={len_score:.3f}, Mixed_Score={mixed:.3f} {is_chosen}")
+        
+        # Show decision logic
+        best_idx = best_in_topk[batch_idx].item()
+        logger.info(f"    - Decision: The best mixed_score is at index {best_idx} in the top-{k} list.")
+        logger.info(f"    - Result: Final chosen token ID = {chosen[batch_idx].item()}")
+    
+    logger.info(f"--- [End of log] ---")
+    logger.info("")
+
+    return chosen
+
 
 _SAMPLING_EPS = 1e-5
 
