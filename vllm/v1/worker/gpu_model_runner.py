@@ -107,6 +107,8 @@ def precompute_token_lengths(model_config) -> tuple[torch.Tensor, int]:
         except Exception:
             token_lengths[token_id] = 0
 
+    token_lengths[tokenizer.eos_token_id] = 2
+
     return token_lengths, tokenizer.eos_token_id
 
 
