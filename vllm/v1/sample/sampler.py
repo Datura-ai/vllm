@@ -61,13 +61,59 @@ def longest_word_sample(
     chosen = topk_idx.gather(-1, best_in_topk).squeeze(-1)  # [B]
 
     # 4. EOS has priority if it's in top-k with finite logit
+    eos_was_chosen = torch.zeros_like(chosen, dtype=torch.bool)
     if eos_token_id is not None:
         eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(topk_logits)
+        eos_was_chosen = eos_in_topk.any(dim=-1)
         chosen = torch.where(
-            eos_in_topk.any(dim=-1),
+            eos_was_chosen,
             torch.full_like(chosen, eos_token_id),
             chosen,
         )
+
+    # 5. Detailed logging for debugging
+    batch_size = logits.size(0)
+    print(f"--- [Longest Word Sampling Log] ---")
+    print(f"Batch size: {batch_size}, Top-k: {k}, Mix ratio: {mix_ratio:.2f}")
+    print(f"EOS token ID: {eos_token_id}")
+    print("Detailed breakdown for each sequence in the batch:")
+    
+    for i in range(batch_size):
+        print(f"  [Sequence {i+1}/{batch_size}]")
+        print(f"    - Top-{k} candidates (ID, Logit, ProbScore, LengthScore, MixScore):")
+        
+        # Get token lengths for this sequence
+        seq_token_lengths = token_lengths[topk_idx[i].clamp_max(token_lengths.size(0) - 1)]
+        
+        # Print formatted table of candidates
+        for j in range(k):
+            token_id = topk_idx[i, j].item()
+            logit_val = topk_logits[i, j].item()
+            prob_val = prob_score[i, j].item()
+            length_val = seq_token_lengths[j].item()
+            length_score_val = length_score[i, j].item()
+            mix_score_val = mix_score[i, j].item()
+            
+            # Mark the chosen one
+            is_chosen = "<- CHOSEN" if j == best_in_topk[i].item() else ""
+            if eos_was_chosen[i] and token_id == eos_token_id:
+                is_chosen = "<- EOS PRIORITY"
+            
+            print(f"      - Candidate {j+1:2d}: ID={token_id:6d}, "
+                  f"Logit={logit_val:8.3f}, Prob={prob_val:6.3f}, "
+                  f"Length={length_val:2d}, LengthScore={length_score_val:6.3f}, "
+                  f"MixScore={mix_score_val:6.3f} {is_chosen}")
+
+        chosen_index_in_topk = best_in_topk[i].item()
+        final_token_id = chosen[i].item()
+        
+        if eos_was_chosen[i]:
+            print(f"    - Decision: EOS token prioritized (found in top-{k})")
+        else:
+            print(f"    - Decision: Best mix score is at index {chosen_index_in_topk} in the top-{k} list")
+        print(f"    - Result: Final chosen token ID = {final_token_id}")
+
+    print(f"--- [End of log] ---\n")
 
     return chosen
 
