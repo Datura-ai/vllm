@@ -10,7 +10,6 @@ git checkout dev
 cd vllm
 
 VLLM_USE_PRECOMPILED=1 pip install --editable .
-
 export VLLM_EOS_TOKEN_USAGE=0
 export VLLM_MIX_RATIO=1 
 vllm serve unsloth/Llama-3.2-3B-Instruct --max_model_len 20000 --tokenizer tau-vision/llama-tokenizer-fix --dtype half --num-scheduler-steps 1 --enable-chunked-prefill --gpu-memory-utilization 0.95 --tensor-parallel-size 8 --port 20000
@@ -18,6 +17,22 @@ vllm serve unsloth/Llama-3.2-3B-Instruct --max_model_len 20000 --tokenizer tau-v
 
 ## Configs:
 VLLM_MIX_RATIO=0.5 #  (0.0=pure probability, 1.0=pure longest word)
+
+## Docker Build and Push
+
+Build and push the Docker image to Docker Hub:
+
+```bash
+# Build the Docker image
+cd untracked/builder
+docker build -t arhangel662/vllm-llama-longest:latest .
+
+# Login to Docker Hub (if not already logged in)
+docker login
+
+# Push the image to Docker Hub
+docker push arhangel662/vllm-llama-longest:latest
+```
 
 <p align="center">
   <picture>
