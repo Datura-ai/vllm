@@ -29,11 +29,11 @@ EOS_PROB_RATIO = 100.0
 
 
 def longest_word_sample(
-        logits: torch.Tensor,
-        token_lengths: torch.Tensor,
-        top_k: int = 10,
-        mix_ratio: float = 0.5,
-        eos_token_id: int | None = None,
+    logits: torch.Tensor,
+    token_lengths: torch.Tensor,
+    top_k: int = 10,
+    mix_ratio: float = 0.5,
+    eos_token_id: int | None = None,
 ) -> torch.Tensor:
     """
     Sample tokens by mixing longest word selection with probability-based sampling.
@@ -66,10 +66,13 @@ def longest_word_sample(
     # 3. Mix probability and length scores based on mix_ratio
     mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
 
+    prob_threshold = 0
     # 4. Apply EOS probability threshold logic if EOS token is specified
     if eos_token_id is not None:
         # Identify which batches have EOS token in their top-k candidates
-        eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(topk_logits)  # [B, k]
+        eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(
+            topk_logits
+        )  # [B, k]
         rows_with_eos = eos_in_topk.any(dim=-1)  # [B]
 
         # Apply threshold logic only if at least one batch contains EOS
@@ -78,15 +81,15 @@ def longest_word_sample(
             eos_prob = (prob_score * eos_in_topk).sum(
                 dim=-1, keepdim=True
             )  # [B, 1]
-            
+
             # Calculate threshold: tokens must have prob >= eos_prob/EOS_PROB_RATIO
             prob_threshold = eos_prob / EOS_PROB_RATIO  # [B, 1]
-            
+
             # Mark tokens that meet the probability threshold
             valid_candidate_mask = prob_score >= prob_threshold  # [B, k]
 
             # Mask out invalid tokens by setting their mix_score to -inf
-            # Keep score if: 
+            # Keep score if:
             # 1) Token probability >= threshold, OR
             # 2) This batch doesn't have EOS in top-k (normal logic applies)
             mix_score = torch.where(

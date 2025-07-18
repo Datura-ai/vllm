@@ -235,30 +235,48 @@ def test_eos_forced_selection_when_alternatives_are_low_prob():
     Tests that the EOS token is forcibly selected when it's in the top-k candidates
     and all other candidates fall below the probability threshold (eos_prob / 100).
     This scenario was the cause of the original bug.
+    Test includes two batches to verify consistent behavior across batch processing.
     """
-    # Arrange: Create a scenario mimicking the production bug.
-    # EOS (index 1) has a very high probability (0.995).
-    # The next best token (index 2) has a very low probability (0.002), but the longest length.
-    # The probability threshold will be 0.995 / 100 = 0.00995.
-    # All other tokens are below this threshold.
-    probs = torch.tensor([[
-        0.002,  # Token 0: prob < 0.00995
-        0.995,  # Token 1 (EOS): high probability
-        0.002,  # Token 2: prob < 0.00995 (but longest length)
-        0.001,  # Token 3: prob < 0.00995
-    ]])
+    # Arrange: Create two-batch scenario testing different EOS threshold behaviors.
+    # Both batches use token 1 as EOS but demonstrate different selection scenarios
+    # 
+    # Batch 0: Force EOS scenario - EOS prob=0.995, threshold=0.00995
+    #          All other tokens below threshold, so EOS must be selected
+    # Batch 1: Valid alternatives scenario - EOS prob=0.80, threshold=0.008  
+    #          Token 2 (prob=0.19) is above threshold, creating valid choice
+    probs = torch.tensor([
+        [
+            0.002,  # Token 0: prob=0.002 < 0.00995 (below threshold)
+            0.995,  # Token 1 (EOS): high probability
+            0.002,  # Token 2: prob=0.002 < 0.00995 (below threshold, longest length)
+            0.001,  # Token 3: prob=0.001 < 0.00995 (below threshold)
+        ],
+        [
+            0.005,  # Token 0: prob=0.005 < 0.008 (below threshold)
+            0.80,   # Token 1 (EOS): high probability
+            0.19,   # Token 2: prob=0.19 > 0.008 (VALID alternative, longest among valid)
+            0.005,  # Token 3: prob=0.005 < 0.008 (below threshold)
+        ]
+    ])
     logits = probs_to_logits(probs)
-    token_lengths = torch.tensor([1, 2, 4, 0])
-    eos_token_id = 1
+    token_lengths = torch.tensor([1, 2, 4, 5])  # Token 3 has longest length for batch 1
+    eos_token_id = 1  # Same EOS token for both batches
 
     # Act: Test with mix_ratio=1.0, which would normally prioritize the longest token.
     result_length = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=1.0, eos_token_id=eos_token_id)
     result_prob = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=0.0, eos_token_id=eos_token_id)
 
-    # Assert: EOS should be chosen regardless of mix_ratio, because no other token is a valid alternative.
-    # This prevents the orchestrator from flagging an error.
-    assert result_length[0] == eos_token_id, "EOS should be selected even with mix_ratio=1.0"
-    assert result_prob[0] == eos_token_id, "EOS should be selected with mix_ratio=0.0"
+    # Assert: Different behaviors for each batch based on threshold logic
+    
+    # Batch 0: Force EOS - all alternatives below threshold, only EOS is valid
+    assert result_length[0] == 1, "Batch 0: EOS forced (mix_ratio=1.0, no valid alternatives)"
+    assert result_prob[0] == 1, "Batch 0: EOS forced (mix_ratio=0.0, no valid alternatives)"
+    
+    # Batch 1: Valid alternatives exist - normal selection among valid tokens [1, 2]
+    # mix_ratio=1.0 (length priority): Token 2 wins (length=4 > Token 1 length=2)
+    # mix_ratio=0.0 (prob priority): Token 1 wins (prob=0.80 > Token 2 prob=0.19)
+    assert result_length[1] == 2, "Batch 1: Token 2 selected (mix_ratio=1.0, longest among valid)"
+    assert result_prob[1] == 1, "Batch 1: EOS selected (mix_ratio=0.0, highest prob among valid)"
 
 
 def test_standard_logic_with_valid_alternatives():
