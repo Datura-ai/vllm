@@ -21,6 +21,12 @@ import torch
 from transformers import AutoTokenizer
 import torch.nn.functional as F
 
+# Probability ratio threshold for EOS token logic
+# When EOS is in top-k, other tokens must have probability >= eos_prob/EOS_PROB_RATIO
+# This prevents selecting extremely unlikely tokens when EOS is available
+# (e.g., prevents cases where chosen_token_prob is 100x lower than eos_prob)
+EOS_PROB_RATIO = 100.0
+
 
 def longest_word_sample(
         logits: torch.Tensor,
@@ -32,15 +38,17 @@ def longest_word_sample(
     """
     Sample tokens by mixing longest word selection with probability-based sampling.
 
-    If eos_token_id is provided and present in top-k tokens, it will be prioritized
-    and selected immediately regardless of mix_ratio.
+    If eos_token_id is provided and present in top-k tokens, applies a probability
+    threshold rule: only tokens with probability >= eos_prob/EOS_PROB_RATIO can be selected.
+    If no tokens meet this threshold, EOS is forced. This prevents selecting tokens
+    that are significantly less likely than EOS.
 
     Args:
         logits: Tensor of shape [batch_size, vocab_size]
         token_lengths: Tensor of shape [vocab_size] with character lengths
         top_k: Number of top candidates to consider
         mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
-        eos_token_id: If provided and present in top-k, this token will be selected
+        eos_token_id: If provided and present in top-k, enables threshold logic
 
     Returns:
         Tensor of shape [batch_size] - selected token indices
@@ -48,28 +56,50 @@ def longest_word_sample(
     k = min(top_k, logits.size(-1))
     topk_logits, topk_idx = torch.topk(logits, k, dim=-1)  # [B, k]
 
-    # 2. Normalized scores
+    # 2. Calculate normalized probability scores for top-k tokens
     prob_score = F.softmax(topk_logits, dim=-1)  # [B, k]
     length_score = F.softmax(
         token_lengths[topk_idx.clamp_max(token_lengths.size(0) - 1)].float(),
         dim=-1,
     )
 
-    # 3. Mix scores (formula is correct even if mix_ratio=0 or 1)
+    # 3. Mix probability and length scores based on mix_ratio
     mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
+
+    # 4. Apply EOS probability threshold logic if EOS token is specified
+    if eos_token_id is not None:
+        # Identify which batches have EOS token in their top-k candidates
+        eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(topk_logits)  # [B, k]
+        rows_with_eos = eos_in_topk.any(dim=-1)  # [B]
+
+        # Apply threshold logic only if at least one batch contains EOS
+        if rows_with_eos.any():
+            # Extract EOS probability for each batch (0 if EOS not present)
+            eos_prob = (prob_score * eos_in_topk).sum(
+                dim=-1, keepdim=True
+            )  # [B, 1]
+            
+            # Calculate threshold: tokens must have prob >= eos_prob/EOS_PROB_RATIO
+            prob_threshold = eos_prob / EOS_PROB_RATIO  # [B, 1]
+            
+            # Mark tokens that meet the probability threshold
+            valid_candidate_mask = prob_score >= prob_threshold  # [B, k]
+
+            # Mask out invalid tokens by setting their mix_score to -inf
+            # Keep score if: 
+            # 1) Token probability >= threshold, OR
+            # 2) This batch doesn't have EOS in top-k (normal logic applies)
+            mix_score = torch.where(
+                valid_candidate_mask | ~rows_with_eos.unsqueeze(-1),
+                mix_score,
+                -torch.inf,
+            )
+    # 5. Select token with highest (possibly masked) mix_score
     best_in_topk = mix_score.argmax(dim=-1, keepdim=True)  # [B, 1]
     chosen = topk_idx.gather(-1, best_in_topk).squeeze(-1)  # [B]
 
-    # 4. EOS has priority if it's in top-k with finite logit
-    if eos_token_id is not None:
-        eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(topk_logits)
-        chosen = torch.where(
-            eos_in_topk.any(dim=-1),
-            torch.full_like(chosen, eos_token_id),
-            chosen,
-        )
-
     return chosen
+
 
 _SAMPLING_EPS = 1e-5
 

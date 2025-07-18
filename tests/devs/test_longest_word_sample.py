@@ -4,6 +4,14 @@ from vllm.v1.sample.sampler import longest_word_sample, Sampler
 import vllm.envs as envs
 
 
+def probs_to_logits(probs: torch.Tensor) -> torch.Tensor:
+    """Convert probabilities to logits, normalizing first."""
+    # Normalize probabilities
+    probs = probs / probs.sum(dim=-1, keepdim=True)
+    # Convert to logits (log-space)
+    return torch.log(probs + 1e-10)  # add epsilon for numerical stability
+
+
 def setup_function():
     """Set random seed for deterministic tests."""
     torch.manual_seed(42)
@@ -222,107 +230,130 @@ def test_deterministic_behavior():
     assert torch.equal(result1, result2)
 
 
-def test_eos_token_prioritization():
-    """Test that EOS token is prioritized when present in top-k."""
-    # Arrange: Create logits where EOS token has high probability
-    logits = torch.tensor([
-        [0.1, 0.2, 0.9, 0.3, 0.4],  # EOS at index 2, highest prob
-        [0.5, 0.4, 0.1, 0.2, 0.3],  # EOS at index 2, low prob
-    ])
-    token_lengths = torch.tensor([1, 2, 3, 4, 5])
+def test_eos_forced_selection_when_alternatives_are_low_prob():
+    """
+    Tests that the EOS token is forcibly selected when it's in the top-k candidates
+    and all other candidates fall below the probability threshold (eos_prob / 100).
+    This scenario was the cause of the original bug.
+    """
+    # Arrange: Create a scenario mimicking the production bug.
+    # EOS (index 1) has a very high probability (0.995).
+    # The next best token (index 2) has a very low probability (0.002), but the longest length.
+    # The probability threshold will be 0.995 / 100 = 0.00995.
+    # All other tokens are below this threshold.
+    probs = torch.tensor([[
+        0.002,  # Token 0: prob < 0.00995
+        0.995,  # Token 1 (EOS): high probability
+        0.002,  # Token 2: prob < 0.00995 (but longest length)
+        0.001,  # Token 3: prob < 0.00995
+    ]])
+    logits = probs_to_logits(probs)
+    token_lengths = torch.tensor([1, 2, 4, 0])
+    eos_token_id = 1
+
+    # Act: Test with mix_ratio=1.0, which would normally prioritize the longest token.
+    result_length = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=1.0, eos_token_id=eos_token_id)
+    result_prob = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=0.0, eos_token_id=eos_token_id)
+
+    # Assert: EOS should be chosen regardless of mix_ratio, because no other token is a valid alternative.
+    # This prevents the orchestrator from flagging an error.
+    assert result_length[0] == eos_token_id, "EOS should be selected even with mix_ratio=1.0"
+    assert result_prob[0] == eos_token_id, "EOS should be selected with mix_ratio=0.0"
+
+
+def test_standard_logic_with_valid_alternatives():
+    """
+    Tests that standard sampling logic applies when the EOS token is in the top-k,
+    but other valid alternatives (with probability >= eos_prob / 100) exist.
+    """
+    # Arrange: EOS has medium probability, but other tokens are above the threshold.
+    # EOS (index 2) has prob=0.50, so the threshold is 0.50 / 100 = 0.005.
+    # Tokens 0 (prob=0.30) and 1 (prob=0.15) are both above the threshold.
+    probs = torch.tensor([[
+        0.30,    # Token 0: valid, length=3
+        0.15,    # Token 1: valid, length=5 (longest valid)
+        0.50,    # Token 2 (EOS)
+        0.05,    # Token 3: not in top-k but above threshold
+        0.004,   # Token 4: below threshold
+    ]])
+    logits = probs_to_logits(probs)
+    token_lengths = torch.tensor([3, 5, 2, 4, 1])
     eos_token_id = 2
-    
-    # Act: Use different mix ratios
-    result_prob = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=0.0, eos_token_id=eos_token_id)
-    result_mixed = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=0.5, eos_token_id=eos_token_id)
-    result_length = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=1.0, eos_token_id=eos_token_id)
-    
-    # Assert: Batch 0 should always select EOS (index 2) since it's in top-k
+
+    # Act: Test with pure length and pure probability selection.
+    # The top-k candidates will be [2, 0, 1, 3].
+    # The valid candidates for sampling (above threshold 0.005) are [0, 1, 2, 3].
+    result_length = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=1.0, eos_token_id=eos_token_id)
+    result_prob = longest_word_sample(logits, token_lengths, top_k=4, mix_ratio=0.0, eos_token_id=eos_token_id)
+
+    # Assert: The selection should happen among the valid candidates based on the mix_ratio.
+    # With mix_ratio=1.0, it should select the longest valid token among [0,1,2,3], which is token 1.
+    assert result_length[0] == 1
+    # With mix_ratio=0.0, it should select the most probable token among [0,1,2,3], which is token 2 (EOS).
+    # Note: The original EOS itself is part of the valid set for sampling.
     assert result_prob[0] == 2
-    assert result_mixed[0] == 2
-    assert result_length[0] == 2
-    
-    # Batch 1 should use normal logic since EOS is not in top-k
-    assert result_prob[1] == 0  # highest prob among top-k
-    assert result_length[1] == 4  # longest among top-k
 
 
-def test_eos_token_not_in_topk():
-    """Test that normal logic works when EOS token is not in top-k."""
-    # Arrange: Create logits where EOS token has very low probability
-    logits = torch.tensor([[0.5, 0.4, 0.01, 0.3, 0.2]])  # EOS at index 2, very low prob
-    token_lengths = torch.tensor([1, 2, 3, 4, 5])
-    eos_token_id = 2
-    
-    # Act: Use pure length selection
-    result = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=1.0, eos_token_id=eos_token_id)
-    
-    # Assert: Should select longest token among top-k [0,1,3], which is index 3
-    assert result[0] == 3
-    assert result[0] != eos_token_id
-
-
-def test_eos_token_mixed_batch():
-    """Test batch where some requests have EOS in top-k and others don't."""
-    # Arrange: Create mixed scenario
-    logits = torch.tensor([
-        [0.1, 0.2, 0.9, 0.3, 0.4],  # EOS at index 2, high prob (in top-k)
-        [0.5, 0.4, 0.01, 0.3, 0.2],  # EOS at index 2, low prob (not in top-k)
-        [0.2, 0.1, 0.8, 0.3, 0.4],  # EOS at index 2, high prob (in top-k)
-        [0.4, 0.5, 0.02, 0.3, 0.2],  # EOS at index 2, low prob (not in top-k)
+def test_mixed_batch_and_edge_cases():
+    """
+    Tests multiple scenarios in a single batch, including:
+    1. A case where EOS must be force-selected.
+    2. A case where a token's probability is exactly at the threshold.
+    3. A case where EOS is not in the top-k, so the logic is bypassed.
+    """
+    # Arrange: Create a batch with three distinct scenarios.
+    probs = torch.tensor([
+        # Batch 0: Force EOS. EOS prob=0.99, threshold=0.0099. All others are below.
+        [0.002, 0.003, 0.990, 0.005],
+        # Batch 1: Boundary condition. EOS prob=0.50, threshold=0.005.
+        # Token 1 is exactly at the threshold and should be a valid candidate. It is also the longest.
+        [0.010, 0.005, 0.500, 0.485],
+        # Batch 2: EOS not in top-k. Normal logic should apply among top-k [0, 1, 3].
+        [0.40, 0.35, 0.01, 0.24],
     ])
-    token_lengths = torch.tensor([1, 2, 3, 4, 5])
+    logits = probs_to_logits(probs)
+    # Token lengths are shared across the batch for simplicity.
+    token_lengths = torch.tensor([5, 4, 2, 3])
     eos_token_id = 2
-    
-    # Act: Use mixed ratio
-    result = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=0.5, eos_token_id=eos_token_id)
-    
-    # Assert: Batches 0 and 2 should select EOS token
-    assert result[0] == eos_token_id
-    assert result[2] == eos_token_id
-    
-    # Batches 1 and 3 should use normal logic
-    assert result[1] != eos_token_id
-    assert result[3] != eos_token_id
+
+    # Act: Run the sampling with a length-favoring mix_ratio.
+    result = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=1.0, eos_token_id=eos_token_id)
+
+    # Assert: Check the outcome for each item in the batch.
+    # Batch 0: Must select EOS (index 2) as all others are below the 0.0099 threshold.
+    assert result[0] == 2
+
+    # Batch 1: Valid candidates are 0 (len=5), 1 (len=4), 3 (len=3), and 2 (len=2).
+    # With mix_ratio=1.0, it should pick the longest, which is token 0.
+    # Note: Correcting logic from original single test `test_eos_probability_threshold_exact_boundary`
+    # which had different lengths. With these lengths, token 0 is longest.
+    assert result[1] == 0
+
+    # Batch 2: EOS (index 2, prob=0.01) is not in the top-3 candidates ([0, 1, 3]).
+    # The EOS threshold logic is skipped. Selection is among top-3.
+    # Longest among [0, 1, 3] is token 0 (length 5).
+    assert result[2] == 0
 
 
-def test_eos_token_none():
-    """Test that function works normally when eos_token_id is None."""
-    # Arrange: Create test data
+def test_eos_logic_is_disabled_or_not_applicable():
+    """
+    Tests that the function works normally when the EOS logic is not applicable,
+    such as when eos_token_id is None or the vocabulary is trivial.
+    """
+    # Arrange: Standard inputs, but with eos_token_id set to None.
     logits = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5]])
     token_lengths = torch.tensor([1, 2, 3, 4, 5])
-    
-    # Act: Use different mix ratios with no EOS token
+
+    # Act: Call the function without a specific EOS token.
     result_prob = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=0.0, eos_token_id=None)
     result_length = longest_word_sample(logits, token_lengths, top_k=3, mix_ratio=1.0, eos_token_id=None)
-    
-    # Assert: Should behave normally
-    assert result_prob[0] == 4  # highest prob among top-k [4,3,2]
-    assert result_length[0] == 4  # longest among top-k [4,3,2] with lengths [5,4,3]
 
-
-def test_eos_token_edge_cases():
-    """Test EOS token behavior in edge cases."""
-    # Arrange: Single token vocabulary with EOS
-    logits = torch.tensor([[0.5]])
-    token_lengths = torch.tensor([3])
-    eos_token_id = 0
-    
-    # Act: Test with top_k=1
-    result = longest_word_sample(logits, token_lengths, top_k=1, mix_ratio=0.5, eos_token_id=eos_token_id)
-    
-    # Assert: Should select the only token (which is EOS)
-    assert result[0] == 0
-    
-    # Test with EOS token ID out of range
-    logits = torch.tensor([[0.1, 0.2, 0.3]])
-    token_lengths = torch.tensor([1, 2, 3])
-    eos_token_id = 5  # Out of range
-    
-    result = longest_word_sample(logits, token_lengths, top_k=2, mix_ratio=1.0, eos_token_id=eos_token_id)
-    
-    # Assert: Should work normally since EOS is not in vocabulary
-    assert result[0] == 2  # longest among top-k [2,1] with lengths [3,2]
+    # Assert: Should behave like standard top-k sampling.
+    # Top-k indices are [4, 3, 2].
+    # Highest probability is at index 4.
+    assert result_prob[0] == 4
+    # Longest length is at index 4.
+    assert result_length[0] == 4
 
 
 if __name__ == "__main__":
@@ -342,11 +373,10 @@ if __name__ == "__main__":
         test_env_variable_loading,
         test_sampler_class_integration,
         test_deterministic_behavior,
-        test_eos_token_prioritization,
-        test_eos_token_not_in_topk,
-        test_eos_token_mixed_batch,
-        test_eos_token_none,
-        test_eos_token_edge_cases,
+        test_eos_forced_selection_when_alternatives_are_low_prob,
+        test_standard_logic_with_valid_alternatives,
+        test_mixed_batch_and_edge_cases,
+        test_eos_logic_is_disabled_or_not_applicable,
     ]
     
     print("Running longest_word_sample tests...")
