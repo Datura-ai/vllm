@@ -208,6 +208,55 @@ def apply_top_k_top_p(
     return logits
 
 
+def apply_top_k_top_p_with_candidates(
+    logits: torch.Tensor,
+    k: Optional[torch.Tensor],
+    p: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """Apply top-k and top-p masks to the logits and return candidates when possible.
+
+    If a top-p is used, this function will sort the logits tensor,
+    which can be slow for large batches.
+
+    The logits tensor may be updated in-place.
+    
+    Returns:
+        filtered_logits: Logits with top-k/top-p mask applied
+        topk_logits: Top-k logits values [batch_size, max_top_k] (None if top-p is used)
+        topk_indices: Top-k token indices [batch_size, max_top_k] (None if top-p is used)
+    """
+    if p is None:
+        if k is None:
+            return logits, None, None
+
+        # Fast path: top-k only case - return candidates
+        return apply_top_k_only_with_candidates(logits, k)
+
+    # Slow path: top-p case - cannot return candidates efficiently
+    logits_sort, logits_idx = logits.sort(dim=-1, descending=False)
+
+    if k is not None:
+        # Apply top-k.
+        top_k_mask = logits_sort.size(1) - k.to(torch.long)  # shape: B
+        # Get all the top_k values.
+        top_k_mask = logits_sort.gather(1, top_k_mask.unsqueeze(dim=1))
+        top_k_mask = logits_sort < top_k_mask
+        logits_sort.masked_fill_(top_k_mask, -float("inf"))
+
+    if p is not None:
+        # Apply top-p.
+        probs_sort = logits_sort.softmax(dim=-1)
+        probs_sum = torch.cumsum(probs_sort, dim=-1, out=probs_sort)
+        top_p_mask = probs_sum <= 1 - p.unsqueeze(dim=1)
+        # at least one
+        top_p_mask[:, -1] = False
+        logits_sort.masked_fill_(top_p_mask, -float("inf"))
+
+    # Re-sort the probabilities.
+    logits = logits_sort.scatter(dim=-1, index=logits_idx, src=logits_sort)
+    return logits, None, None
+
+
 def apply_top_k_only(
     logits: torch.Tensor,
     k: torch.Tensor,
@@ -231,6 +280,40 @@ def apply_top_k_only(
     top_k_mask.masked_fill_(no_top_k_mask.unsqueeze(1), -float("inf"))
     logits.masked_fill_(logits < top_k_mask, -float("inf"))
     return logits
+
+
+def apply_top_k_only_with_candidates(
+    logits: torch.Tensor,
+    k: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Apply top-k mask to the logits and return the top-k candidates.
+
+    This implementation doesn't involve sorting the entire vocab.
+
+    The logits tensor may be updated in-place.
+    
+    Returns:
+        filtered_logits: Logits with top-k mask applied
+        topk_logits: Top-k logits values [batch_size, max_top_k]
+        topk_indices: Top-k token indices [batch_size, max_top_k]
+    """
+    no_top_k_mask = k == logits.shape[1]
+    # Set non-top-k rows to 1 so that we can gather.
+    k = k.masked_fill(no_top_k_mask, 1)
+    max_top_k = k.max()
+    
+    # Get top-k values and indices
+    topk_values, topk_indices = logits.topk(max_top_k, dim=1, largest=True, sorted=False)
+    
+    # Convert top k to 0-based index in range [0, max_top_k).
+    k_index = k.sub_(1).unsqueeze(1)
+    top_k_mask = topk_values.gather(1, k_index.long())
+    # Handle non-topk rows.
+    top_k_mask.masked_fill_(no_top_k_mask.unsqueeze(1), -float("inf"))
+    logits.masked_fill_(logits < top_k_mask, -float("inf"))
+    
+    return logits, topk_values, topk_indices
 
 
 def random_sample(

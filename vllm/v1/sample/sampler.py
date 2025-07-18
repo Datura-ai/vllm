@@ -15,6 +15,7 @@ from vllm.v1.sample.ops.penalties import apply_all_penalties
 from vllm.v1.sample.ops.topk_topp_sampler import (
     TopKTopPSampler,
     apply_top_k_top_p,
+    apply_top_k_top_p_with_candidates,
 )
 from tqdm import tqdm
 import torch
@@ -29,50 +30,43 @@ EOS_PROB_RATIO = 100.0
 MIN_PROB_THRESHOLD = 0.001  # Minimum probability threshold for valid tokens
 
 
-def longest_word_sample(
-    logits: torch.Tensor,
+
+def _longest_word_sample_core(
+    topk_logits: torch.Tensor,
+    topk_idx: torch.Tensor,
     token_lengths: torch.Tensor,
-    top_k: int = 10,
     mix_ratio: float = 0.5,
     eos_token_id: int | None = None,
 ) -> torch.Tensor:
     """
-    Sample tokens by mixing longest word selection with probability-based sampling.
-
-    If eos_token_id is provided and present in top-k tokens, applies a probability
-    threshold rule: only tokens with probability >= eos_prob/EOS_PROB_RATIO can be selected.
-    If no tokens meet this threshold, EOS is forced. This prevents selecting tokens
-    that are significantly less likely than EOS.
-
+    Core logic for longest word sampling given top-k candidates.
+    
     Args:
-        logits: Tensor of shape [batch_size, vocab_size]
+        topk_logits: Tensor of shape [batch_size, k] with top-k logits
+        topk_idx: Tensor of shape [batch_size, k] with top-k token indices
         token_lengths: Tensor of shape [vocab_size] with character lengths
-        top_k: Number of top candidates to consider
         mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
         eos_token_id: If provided and present in top-k, enables threshold logic
 
     Returns:
         Tensor of shape [batch_size] - selected token indices
     """
-    k = min(top_k, logits.size(-1))
-    topk_logits, topk_idx = torch.topk(logits, k, dim=-1)  # [B, k]
-
-    # 2. Calculate normalized probability scores for top-k tokens
+    # Calculate normalized probability scores for top-k tokens
     prob_score = F.softmax(topk_logits, dim=-1)  # [B, k]
     length_score = F.softmax(
         token_lengths[topk_idx.clamp_max(token_lengths.size(0) - 1)].float(),
         dim=-1,
     )
 
-    # 3. Mix probability and length scores based on mix_ratio
+    # Mix probability and length scores based on mix_ratio
     mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
 
-    # Apply minimum probability threshold of 0.005
+    # Apply minimum probability threshold
     prob_threshold = torch.tensor(MIN_PROB_THRESHOLD, device=prob_score.device)
     valid_mask = prob_score >= prob_threshold
     mix_score = torch.where(valid_mask, mix_score, -torch.inf)
 
-    # 4. Apply EOS probability threshold logic if EOS token is specified
+    # Apply EOS probability threshold logic if EOS token is specified
     if eos_token_id is not None:
         # Identify which batches have EOS token in their top-k candidates
         eos_in_topk = (topk_idx == eos_token_id) & torch.isfinite(
@@ -104,13 +98,73 @@ def longest_word_sample(
                 mix_score,
                 -torch.inf,
             )
-    # 5. Select token with highest (possibly masked) mix_score
+
+    # Select token with highest (possibly masked) mix_score
     best_in_topk = mix_score.argmax(dim=-1, keepdim=True)  # [B, 1]
     chosen = topk_idx.gather(-1, best_in_topk).squeeze(-1)  # [B]
 
-
-
     return chosen
+
+
+def longest_word_sample(
+    logits: torch.Tensor,
+    token_lengths: torch.Tensor,
+    top_k: int = 10,
+    mix_ratio: float = 0.5,
+    eos_token_id: int | None = None,
+) -> torch.Tensor:
+    """
+    Sample tokens by mixing longest word selection with probability-based sampling.
+
+    If eos_token_id is provided and present in top-k tokens, applies a probability
+    threshold rule: only tokens with probability >= eos_prob/EOS_PROB_RATIO can be selected.
+    If no tokens meet this threshold, EOS is forced. This prevents selecting tokens
+    that are significantly less likely than EOS.
+
+    Args:
+        logits: Tensor of shape [batch_size, vocab_size]
+        token_lengths: Tensor of shape [vocab_size] with character lengths
+        top_k: Number of top candidates to consider
+        mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
+        eos_token_id: If provided and present in top-k, enables threshold logic
+
+    Returns:
+        Tensor of shape [batch_size] - selected token indices
+    """
+    k = min(top_k, logits.size(-1))
+    topk_logits, topk_idx = torch.topk(
+        logits, k, dim=-1, largest=True, sorted=False
+    )
+
+    return _longest_word_sample_core(
+        topk_logits, topk_idx, token_lengths, mix_ratio, eos_token_id
+    )
+
+
+def longest_word_sample_from_candidates(
+    topk_logits: torch.Tensor,
+    topk_idx: torch.Tensor,
+    token_lengths: torch.Tensor,
+    mix_ratio: float = 0.5,
+    eos_token_id: int | None = None,
+) -> torch.Tensor:
+    """
+    Sample tokens by mixing longest word selection with probability-based sampling.
+    This version accepts pre-computed top-k candidates to avoid duplicate topk computation.
+
+    Args:
+        topk_logits: Tensor of shape [batch_size, k] with top-k logits
+        topk_idx: Tensor of shape [batch_size, k] with top-k token indices
+        token_lengths: Tensor of shape [vocab_size] with character lengths
+        mix_ratio: Balance between longest-word (1.0) and probability-based (0.0)
+        eos_token_id: If provided and present in top-k, enables threshold logic
+
+    Returns:
+        Tensor of shape [batch_size] - selected token indices
+    """
+    return _longest_word_sample_core(
+        topk_logits, topk_idx, token_lengths, mix_ratio, eos_token_id
+    )
 
 
 _SAMPLING_EPS = 1e-5
@@ -231,26 +285,32 @@ class Sampler(nn.Module):
         for processor in sampling_metadata.logitsprocs.argmax_invariant:
             logits = processor.apply(logits)
 
-        # Apply top_k and/or top_p.
-        # random_sampled = self.topk_topp_sampler(
-        #     logits,
-        #     sampling_metadata.generators,
-        #     sampling_metadata.top_k,
-        #     sampling_metadata.top_p,
-        # )
-        filtered_logits = apply_top_k_top_p(
+        # Apply top_k and/or top_p with candidate optimization
+        filtered_logits, topk_logits, topk_indices = apply_top_k_top_p_with_candidates(
             logits,
             sampling_metadata.top_k,
             sampling_metadata.top_p,
         )
 
-        random_sampled = longest_word_sample(
-            filtered_logits, 
-            self.token_lengths_gpu, 
-            top_k=sampling_metadata.top_k.max().item() if sampling_metadata.top_k is not None else 10,
-            mix_ratio=self.mix_ratio,
-            eos_token_id=self.eos_token_id,
-        )
+        # Use optimized version with pre-computed candidates when available
+        if topk_logits is not None and topk_indices is not None:
+            # Fast path: use pre-computed top-k candidates
+            random_sampled = longest_word_sample_from_candidates(
+                topk_logits,
+                topk_indices,
+                self.token_lengths_gpu,
+                mix_ratio=self.mix_ratio,
+                eos_token_id=self.eos_token_id,
+            )
+        else:
+            # Slow path: fallback to original method (when top-p is used)
+            random_sampled = longest_word_sample(
+                filtered_logits, 
+                self.token_lengths_gpu, 
+                top_k=sampling_metadata.top_k.max().item() if sampling_metadata.top_k is not None else 10,
+                mix_ratio=self.mix_ratio,
+                eos_token_id=self.eos_token_id,
+            )
 
         if greedy_sampled is None:
             return random_sampled

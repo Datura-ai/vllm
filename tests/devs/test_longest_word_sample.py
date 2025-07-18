@@ -374,6 +374,44 @@ def test_eos_logic_is_disabled_or_not_applicable():
     assert result_length[0] == 4
 
 
+def test_performance_quick():
+    """Quick performance test to establish baseline metrics."""
+    import time
+    
+    # Test configuration
+    batch_sizes = [1, 32, 128]
+    vocab_size = 32000
+    top_k = 50
+    mix_ratio = 0.5
+    num_iters = 100
+    
+    # Performance test without print output for clean test runs
+    for batch_size in batch_sizes:
+        # Create test data
+        logits = torch.randn(batch_size, vocab_size)
+        token_lengths = torch.randint(1, 31, (vocab_size,))
+        
+        # Warmup
+        for _ in range(10):
+            _ = longest_word_sample(logits, token_lengths, top_k, mix_ratio)
+        
+        # Benchmark
+        start_time = time.perf_counter()
+        for _ in range(num_iters):
+            _ = longest_word_sample(logits, token_lengths, top_k, mix_ratio)
+        elapsed_time = time.perf_counter() - start_time
+        
+        # Calculate metrics
+        avg_time_ms = (elapsed_time * 1000) / num_iters
+        throughput = (batch_size * num_iters) / elapsed_time
+        
+        # Assert reasonable performance bounds
+        assert avg_time_ms < 1000, f"Performance too slow: {avg_time_ms}ms"
+        assert throughput > 0, f"Invalid throughput: {throughput}"
+    # Basic assertion to ensure function runs
+    assert avg_time_ms > 0
+
+
 def test_minimum_probability_threshold():
     """
     Test that tokens with probability < 0.001 are always excluded from sampling,
@@ -464,6 +502,7 @@ if __name__ == "__main__":
         test_standard_logic_with_valid_alternatives,
         test_mixed_batch_and_edge_cases,
         test_eos_logic_is_disabled_or_not_applicable,
+        test_performance_quick,
         test_minimum_probability_threshold,
     ]
     
