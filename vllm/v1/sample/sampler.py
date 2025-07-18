@@ -26,6 +26,7 @@ import torch.nn.functional as F
 # This prevents selecting extremely unlikely tokens when EOS is available
 # (e.g., prevents cases where chosen_token_prob is 100x lower than eos_prob)
 EOS_PROB_RATIO = 100.0
+MIN_PROB_THRESHOLD = 0.001  # Minimum probability threshold for valid tokens
 
 
 def longest_word_sample(
@@ -66,7 +67,11 @@ def longest_word_sample(
     # 3. Mix probability and length scores based on mix_ratio
     mix_score = (1.0 - mix_ratio) * prob_score + mix_ratio * length_score
 
-    prob_threshold = 0
+    # Apply minimum probability threshold of 0.005
+    prob_threshold = torch.tensor(MIN_PROB_THRESHOLD, device=prob_score.device)
+    valid_mask = prob_score >= prob_threshold
+    mix_score = torch.where(valid_mask, mix_score, -torch.inf)
+
     # 4. Apply EOS probability threshold logic if EOS token is specified
     if eos_token_id is not None:
         # Identify which batches have EOS token in their top-k candidates
@@ -83,15 +88,17 @@ def longest_word_sample(
             )  # [B, 1]
 
             # Calculate threshold: tokens must have prob >= eos_prob/EOS_PROB_RATIO
-            prob_threshold = eos_prob / EOS_PROB_RATIO  # [B, 1]
+            # but also enforce minimum threshold of 0.005
+            eos_threshold = torch.maximum(
+                eos_prob / EOS_PROB_RATIO,
+                torch.tensor(0.005, device=eos_prob.device)
+            )  # [B, 1]
 
-            # Mark tokens that meet the probability threshold
-            valid_candidate_mask = prob_score >= prob_threshold  # [B, k]
+            # Mark tokens that meet the EOS probability threshold
+            valid_candidate_mask = prob_score >= eos_threshold  # [B, k]
 
-            # Mask out invalid tokens by setting their mix_score to -inf
-            # Keep score if:
-            # 1) Token probability >= threshold, OR
-            # 2) This batch doesn't have EOS in top-k (normal logic applies)
+            # Further mask out tokens based on EOS threshold
+            # Only apply additional masking for rows that have EOS
             mix_score = torch.where(
                 valid_candidate_mask | ~rows_with_eos.unsqueeze(-1),
                 mix_score,
@@ -101,12 +108,16 @@ def longest_word_sample(
     best_in_topk = mix_score.argmax(dim=-1, keepdim=True)  # [B, 1]
     chosen = topk_idx.gather(-1, best_in_topk).squeeze(-1)  # [B]
 
+
+
     return chosen
 
 
 _SAMPLING_EPS = 1e-5
 
+
 logger = init_logger(__name__)
+# docker logs -n 5000 orchestrator 2>&1 | grep  -A 10 -B 10 -Ei "❌"
 
 
 class Sampler(nn.Module):

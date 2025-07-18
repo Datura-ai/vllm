@@ -374,6 +374,75 @@ def test_eos_logic_is_disabled_or_not_applicable():
     assert result_length[0] == 4
 
 
+def test_minimum_probability_threshold():
+    """
+    Test that tokens with probability < 0.001 are always excluded from sampling,
+    regardless of EOS token presence or mix_ratio setting.
+    """
+    # Test 1: Without EOS token - verify basic threshold enforcement
+    # Create scenario where tokens have varying probabilities around the 0.001 threshold
+    probs = torch.tensor([[
+        0.0001,   # Token 0: below threshold (excluded)
+        0.0009,   # Token 1: below threshold (excluded)
+        0.001,    # Token 2: exactly at threshold (included)
+        0.002,    # Token 3: above threshold (included)
+        0.9959,   # Token 4: high probability (included)
+    ]])
+    logits = probs_to_logits(probs)
+    token_lengths = torch.tensor([5, 4, 3, 2, 1])  # Token 0 is longest but excluded
+    
+    # Act: Test with mix_ratio=1.0 (pure length selection)
+    result = longest_word_sample(logits, token_lengths, top_k=5, mix_ratio=1.0, eos_token_id=None)
+    
+    # Assert: Token 0 and 1 should be excluded despite being long
+    # Among valid tokens [2, 3, 4], token 2 is longest (length=3)
+    assert result[0] == 2
+    
+    # Test 2: With EOS token - verify minimum threshold still applies
+    # EOS has high probability, but some alternatives are below 0.001
+    probs_with_eos = torch.tensor([[
+        0.0002,   # Token 0: below threshold
+        0.900,    # Token 1 (EOS): high probability
+        0.0008,   # Token 2: below threshold
+        0.010,    # Token 3: above threshold
+        0.0890,   # Token 4: above threshold
+    ]])
+    logits_with_eos = probs_to_logits(probs_with_eos)
+    token_lengths_eos = torch.tensor([10, 2, 8, 6, 4])  # Token 0 is longest but excluded
+    
+    # Act: Test with EOS token specified
+    result_eos = longest_word_sample(logits_with_eos, token_lengths_eos, top_k=5, 
+                                     mix_ratio=1.0, eos_token_id=1)
+    
+    # Assert: Tokens 0 and 2 excluded by minimum threshold
+    # Among valid tokens [1, 3, 4], token 3 is longest (length=6)
+    assert result_eos[0] == 3
+    
+    # Test 3: Multiple batches with boundary cases
+    probs_batch = torch.tensor([
+        # Batch 0: All tokens below threshold except one
+        [0.0001, 0.0002, 0.0003, 0.0004, 0.9990],
+        # Batch 1: Some tokens above threshold
+        [0.0015, 0.0012, 0.001, 0.0009, 0.9954],
+        # Batch 2: Mix of above and below threshold
+        [0.0008, 0.0012, 0.0004, 0.0011, 0.9965],
+    ])
+    logits_batch = probs_to_logits(probs_batch)
+    lengths_batch = torch.tensor([5, 4, 3, 2, 1])
+    
+    # Act: Test all batches
+    result_batch = longest_word_sample(logits_batch, lengths_batch, top_k=5, 
+                                       mix_ratio=1.0, eos_token_id=None)
+    
+    # Assert: Each batch should select appropriately
+    # Batch 0: Only token 4 is valid (prob >= 0.001)
+    assert result_batch[0] == 4
+    # Batch 1: Valid tokens are [0, 1, 2, 4], longest is token 0 (length=5)
+    assert result_batch[1] == 0  
+    # Batch 2: Valid tokens are [1, 3, 4], longest is token 1 (length=4)
+    assert result_batch[2] == 1
+
+
 if __name__ == "__main__":
     # Run tests manually since pytest may not be available
     import sys
@@ -395,6 +464,7 @@ if __name__ == "__main__":
         test_standard_logic_with_valid_alternatives,
         test_mixed_batch_and_edge_cases,
         test_eos_logic_is_disabled_or_not_applicable,
+        test_minimum_probability_threshold,
     ]
     
     print("Running longest_word_sample tests...")
