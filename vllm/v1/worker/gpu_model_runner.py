@@ -87,6 +87,31 @@ else:
 logger = init_logger(__name__)
 from transformers import AutoTokenizer
 
+
+def get_bad_tokens_by_length(tokenizer, max_len: int) -> list[int]:
+    """
+    Find token IDs that have bad pairs and token length > max_len.
+
+    Args:
+        tokenizer: Tokenizer instance
+        max_len: Maximum token length threshold
+
+    Returns:
+        List of token IDs that meet criteria
+    """
+    bad_token_ids = [6360]
+
+    # for t in range(tokenizer.vocab_size):
+    #     s = tokenizer.decode([t], clean_up_tokenization_spaces=False)
+    #     if len(s) > max_len:
+    #         doubled = s + s
+    #         new = tokenizer.encode(doubled, add_special_tokens=False)
+    #         if len(new) == 1 and new[0] != t:
+    #             bad_token_ids.append(t)
+    # logger.info(f"Found {len(bad_token_ids)} bad tokens, example: {bad_token_ids[:5]}")
+    return bad_token_ids
+
+
 def precompute_token_lengths(model_config) -> torch.Tensor:
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.tokenizer,
@@ -103,9 +128,17 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
             token_str = tokenizer.decode(
                 [token_id],
             )
-            token_lengths[token_id] = len(token_str.strip("\r\n"))
+            token_lengths[token_id] = len(token_str)
         except Exception:
             token_lengths[token_id] = 0
+
+    max_length = 8
+    force_legnth = 5
+    bad_tokens = get_bad_tokens_by_length(tokenizer, max_len=max_length)
+    # set to all tokens with id of bad tokens - max_length
+    # set all bad tokens to max_length
+    for bad_token_id in bad_tokens:
+        token_lengths[bad_token_id] = force_legnth
 
     return token_lengths
 
