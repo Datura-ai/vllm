@@ -88,7 +88,7 @@ logger = init_logger(__name__)
 from transformers import AutoTokenizer
 
 
-def get_bad_tokens_by_length(tokenizer, max_len: int, bad_token_ids: list[int] = [], find_all: bool = False) -> list[int]:
+def get_bad_tokens_by_length(tokenizer, max_len: int, bad_token_ids: list[int], find_all: bool = False) -> list[int]:
     """
     Find token IDs that have bad pairs and token length > max_len.
 
@@ -146,7 +146,7 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
     bad_tokens = get_bad_tokens_by_length(
         tokenizer, 
         max_len=max_length,
-        bad_token_ids=env_bad_tokens if env_bad_tokens else None,
+        bad_token_ids=env_bad_tokens if env_bad_tokens else [],
         find_all=env_bad_tokens_all
     )
     
