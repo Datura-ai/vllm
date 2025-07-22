@@ -88,28 +88,32 @@ logger = init_logger(__name__)
 from transformers import AutoTokenizer
 
 
-def get_bad_tokens_by_length(tokenizer, max_len: int) -> list[int]:
+def get_bad_tokens_by_length(tokenizer, max_len: int, bad_token_ids: list[int] = [], find_all: bool = False) -> list[int]:
     """
     Find token IDs that have bad pairs and token length > max_len.
 
     Args:
         tokenizer: Tokenizer instance
         max_len: Maximum token length threshold
+        bad_token_ids: List of specific bad token IDs to include
+        find_all: If True, automatically find all problematic tokens
 
     Returns:
         List of token IDs that meet criteria
     """
-    bad_token_ids = [6360]
-
-    # for t in range(tokenizer.vocab_size):
-    #     s = tokenizer.decode([t], clean_up_tokenization_spaces=False)
-    #     if len(s) > max_len:
-    #         doubled = s + s
-    #         new = tokenizer.encode(doubled, add_special_tokens=False)
-    #         if len(new) == 1 and new[0] != t:
-    #             bad_token_ids.append(t)
-    # logger.info(f"Found {len(bad_token_ids)} bad tokens, example: {bad_token_ids[:5]}")
-    return bad_token_ids
+    bad_tokens = bad_token_ids.copy()
+    
+    # If find_all = True, add all tokens with length > max_len
+    if find_all:
+        for t in range(tokenizer.vocab_size):
+            s = tokenizer.decode([t], clean_up_tokenization_spaces=False)
+            if len(s) > max_len:
+                doubled = s + s
+                new = tokenizer.encode(doubled, add_special_tokens=False)
+                if len(new) == 1 and new[0] != t:
+                    bad_tokens.append(t)
+    
+    return bad_tokens
 
 
 def precompute_token_lengths(model_config) -> torch.Tensor:
@@ -133,12 +137,27 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
             token_lengths[token_id] = 0
 
     max_length = 8
-    force_legnth = 5
-    bad_tokens = get_bad_tokens_by_length(tokenizer, max_len=max_length)
-    # set to all tokens with id of bad tokens - max_length
-    # set all bad tokens to max_length
+    force_length = 5
+    
+    # Get env vars
+    env_bad_tokens = envs.VLLM_BAD_TOKENS_IDS
+    env_bad_tokens_all = envs.VLLM_BAD_TOKENS_ALL
+    
+    bad_tokens = get_bad_tokens_by_length(
+        tokenizer, 
+        max_len=max_length,
+        bad_token_ids=env_bad_tokens if env_bad_tokens else None,
+        find_all=env_bad_tokens_all
+    )
+    
+    # Apply modifications to bad tokens
     for bad_token_id in bad_tokens:
-        token_lengths[bad_token_id] = force_legnth
+        token_lengths[bad_token_id] = force_length
+
+    # Log environment variables and results
+    logger.info(f"Bad tokens configuration: VLLM_BAD_TOKENS_IDS={env_bad_tokens}, VLLM_BAD_TOKENS_ALL={env_bad_tokens_all}")
+    logger.info(f"Found {len(bad_tokens)} bad tokens, example: {bad_tokens[:5]}")
+    logger.info(f"Applied force_length={force_length} to {len(bad_tokens)} bad tokens")
 
     return token_lengths
 
