@@ -154,7 +154,7 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
     # Apply modifications to bad tokens
     for bad_token_id in bad_tokens:
         token_lengths[bad_token_id] = force_length
-    token_lengths[tokenizer.eos_token_id] = force_length
+    token_lengths[tokenizer.eos_token_id] = 1
 
     # Log environment variables and results
     logger.info(f"Bad tokens configuration: VLLM_BAD_TOKENS_IDS={env_bad_tokens}, VLLM_BAD_TOKENS_ALL={env_bad_tokens_all}")
