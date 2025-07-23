@@ -126,11 +126,12 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
     vocab_size = len(tokenizer)
     token_lengths = torch.zeros(vocab_size, dtype=torch.int32)
     for token_id in tqdm(
-        range(vocab_size), desc="Worker: Precomputing token lengths"
+            range(vocab_size), desc="Worker: Precomputing token lengths"
     ):
         try:
             token_str = tokenizer.decode(
                 [token_id],
+                skip_special_tokens=True,
             )
             token_lengths[token_id] = len(token_str)
         except Exception:
@@ -138,21 +139,22 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
 
     max_length = 8
     force_length = 5
-    
+
     # Get env vars
     env_bad_tokens = envs.VLLM_BAD_TOKENS_IDS
     env_bad_tokens_all = envs.VLLM_BAD_TOKENS_ALL
-    
+
     bad_tokens = get_bad_tokens_by_length(
-        tokenizer, 
+        tokenizer,
         max_len=max_length,
         bad_token_ids=env_bad_tokens if env_bad_tokens else [],
         find_all=env_bad_tokens_all
     )
-    
+
     # Apply modifications to bad tokens
     for bad_token_id in bad_tokens:
         token_lengths[bad_token_id] = force_length
+    token_lengths[tokenizer.eos_token_id] = force_length
 
     # Log environment variables and results
     logger.info(f"Bad tokens configuration: VLLM_BAD_TOKENS_IDS={env_bad_tokens}, VLLM_BAD_TOKENS_ALL={env_bad_tokens_all}")
