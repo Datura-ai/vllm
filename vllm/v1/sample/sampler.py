@@ -19,11 +19,6 @@ import torch
 from transformers import AutoTokenizer
 
 
-import torch.nn.functional as F
-
-from vllm.logger import init_logger
-logger = init_logger(__name__)
-
 def longest_word_sample(
         logits: torch.Tensor,
         token_lengths: torch.Tensor,
