@@ -54,34 +54,6 @@ def longest_word_sample(
     # Use gather to select the corresponding token indices
     final_tokens = torch.gather(topk_indices, dim=-1, index=longest_indices_in_topk).squeeze(-1)  # [batch_size]
 
-    # Convert logits to logprobs using log_softmax
-    logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
-    topk_logprobs = logprobs.gather(-1, topk_indices)  # [batch_size, top_k]
-
-    # KISS logging for debugging (temporary)
-    # if top_k == 5:
-    print("starting")
-    logger.info(f"--- [LOG: longest_word_sample] ---")
-    logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
-    logger.info(f"Detailed breakdown for each sequence in the batch:")
-
-    batch_size = logits.size(0)
-    for batch_idx in range(batch_size):
-        logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
-        logger.info(f"  [Sequence {batch_idx + 1}/{batch_size}]")
-        logger.info(f"    - Top-{top_k} candidates:")
-
-        for i in range(top_k):
-            token_id = topk_indices[batch_idx, i].item()
-            length = topk_lengths[batch_idx, i].item()
-            logit_val = topk_logits[batch_idx, i].item()
-            logprob_val = topk_logprobs[batch_idx, i].item()
-            chosen = " <<< CHOSEN" if i == longest_indices_in_topk[batch_idx].item() else ""
-            logger.info(f"      - Candidate {i + 1}: ID={token_id}, Length={length}{chosen}, logit_val={logit_val}, logprob_val={logprob_val:.4f}")
-
-        final_token = final_tokens[batch_idx].item()
-        logger.info(f"    - Result: Final chosen token ID = {final_token}")
-
     return final_tokens
 
 _SAMPLING_EPS = 1e-5

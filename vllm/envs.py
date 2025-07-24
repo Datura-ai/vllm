@@ -140,6 +140,7 @@ if TYPE_CHECKING:
     VLLM_ROCM_QUICK_REDUCE_MAX_SIZE_BYTES_MB: Optional[int] = None
     VLLM_BAD_TOKENS_IDS: list[int] = []
     VLLM_BAD_TOKENS_ALL: bool = False
+    VLLM_EOS_TOKEN_LENGTH: int = 1
 
 
 def get_default_cache_root():
@@ -965,7 +966,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
 
     # If true, all potential bad tokens will be pessimized.
     "VLLM_BAD_TOKENS_ALL":
-    lambda: bool(int(os.getenv("VLLM_BAD_TOKENS_ALL", "0")))
+    lambda: bool(int(os.getenv("VLLM_BAD_TOKENS_ALL", "0"))),
+
+    # EOS token ID length.
+    "VLLM_EOS_TOKEN_LENGTH":
+    lambda: int(os.getenv("VLLM_EOS_TOKEN_LENGTH", "5")),
 }
 
 # --8<-- [end:env-vars-definition]
