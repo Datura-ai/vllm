@@ -276,9 +276,15 @@ class Sampler(nn.Module):
                                      sampling_tensors.frequency_penalties,
                                      sampling_tensors.repetition_penalties)
 
-        # Use float32 to apply temperature scaling.
-        # Use in-place division to avoid creating a new tensor.
+        # Convert to float32 for subsequent operations.
         logits = logits.to(torch.float)
+        
+        # Compute the log probabilities from the original logits.
+        # This ensures logprobs are independent of temperature scaling.
+        logprobs = torch.log_softmax(logits, dim=-1, dtype=torch.float)
+        
+        # Apply temperature scaling for sampling.
+        # Use in-place division to avoid creating a new tensor.
         logits.div_(sampling_tensors.temperatures.unsqueeze(dim=1))
 
         if do_top_p_top_k and flashinfer_top_k_top_p_sampling is None:
@@ -288,11 +294,8 @@ class Sampler(nn.Module):
         if do_min_p:
             logits = _apply_min_p(logits, sampling_tensors.min_ps)
 
-        # We use float32 for probabilities and log probabilities.
-        # Compute the probabilities.
+        # Compute the probabilities from temperature-scaled logits.
         probs = torch.softmax(logits, dim=-1, dtype=torch.float)
-        # Compute the log probabilities.
-        logprobs = torch.log_softmax(logits, dim=-1, dtype=torch.float)
 
         # Sample the next tokens.
         maybe_deferred_sample_results, maybe_sampled_tokens_tensor = _sample(
