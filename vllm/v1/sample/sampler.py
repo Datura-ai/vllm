@@ -4,6 +4,7 @@
 
 import torch
 import torch.nn as nn
+from typing import Optional
 
 from vllm.utils import is_pin_memory_available
 from vllm.v1.outputs import LogprobsTensors, SamplerOutput
@@ -51,16 +52,37 @@ def longest_word_sample(
 
     return final_tokens
 
+
+
+
+def get_forced_eos_mask(
+    sampling_metadata: SamplingMetadata,
+    eos_position: Optional[int],
+) -> Optional[torch.Tensor]:
+    """Return mask where EOS should be forced, or None."""
+    if eos_position is None:
+        return None
+        
+    if sampling_metadata.output_lengths is None:
+        return None
+        
+    force_eos_mask = (sampling_metadata.output_lengths == eos_position)
+    
+    return force_eos_mask if force_eos_mask.any() else None
+
+
 _SAMPLING_EPS = 1e-5
 
 
 class Sampler(nn.Module):
 
-    def __init__(self, token_lengths_gpu):
+    def __init__(self, token_lengths_gpu, eos_token_id: int, eos_position: Optional[int] = None):
         super().__init__()
         self.topk_topp_sampler = TopKTopPSampler()
         self.pin_memory = is_pin_memory_available()
         self.token_lengths_gpu = token_lengths_gpu
+        self.eos_token_id = eos_token_id
+        self.eos_position = eos_position
 
     def forward(
         self,
@@ -127,6 +149,7 @@ class Sampler(nn.Module):
     def greedy_sample(self, logits: torch.Tensor) -> torch.Tensor:
         return logits.argmax(dim=-1).view(-1)
 
+
     def sample(
         self,
         logits: torch.Tensor,
@@ -138,50 +161,67 @@ class Sampler(nn.Module):
         may update the logits tensor in-place.
         """
 
+        # First, do normal sampling
         assert not (sampling_metadata.all_greedy
                     and sampling_metadata.all_random)
+        
         if sampling_metadata.all_random:
-            greedy_sampled = None
+            assert sampling_metadata.temperature is not None
+
+            # Apply temperature.
+            logits = self.apply_temperature(logits, sampling_metadata.temperature)
+
+            # Apply logits processors that only apply to random sampling
+            # (argmax invariant)
+            for processor in sampling_metadata.logitsprocs.argmax_invariant:
+                logits = processor.apply(logits)
+
+            # Apply top_k and/or top_p.
+            filtered_logits = apply_top_k_top_p(
+                logits,
+                sampling_metadata.top_k,
+                sampling_metadata.top_p,
+            )
+
+            sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
         else:
             greedy_sampled = self.greedy_sample(logits)
             if sampling_metadata.all_greedy:
-                return greedy_sampled
+                sampled = greedy_sampled
+            else:
+                assert sampling_metadata.temperature is not None
 
-        assert sampling_metadata.temperature is not None
+                # Apply temperature.
+                logits = self.apply_temperature(logits, sampling_metadata.temperature)
 
-        # Apply temperature.
-        logits = self.apply_temperature(logits, sampling_metadata.temperature)
+                # Apply logits processors that only apply to random sampling
+                # (argmax invariant)
+                for processor in sampling_metadata.logitsprocs.argmax_invariant:
+                    logits = processor.apply(logits)
 
-        # Apply logits processors that only apply to random sampling
-        # (argmax invariant)
-        for processor in sampling_metadata.logitsprocs.argmax_invariant:
-            logits = processor.apply(logits)
+                # Apply top_k and/or top_p.
+                filtered_logits = apply_top_k_top_p(
+                    logits,
+                    sampling_metadata.top_k,
+                    sampling_metadata.top_p,
+                )
 
-        # Apply top_k and/or top_p.
-        # random_sampled = self.topk_topp_sampler(
-        #     logits,
-        #     sampling_metadata.generators,
-        #     sampling_metadata.top_k,
-        #     sampling_metadata.top_p,
-        # )
-        filtered_logits = apply_top_k_top_p(
-            logits,
-            sampling_metadata.top_k,
-            sampling_metadata.top_p,
-        )
+                random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
 
-        random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
+                sampled = torch.where(
+                    sampling_metadata.temperature < _SAMPLING_EPS,
+                    greedy_sampled,
+                    random_sampled,
+                    out=greedy_sampled,  # Reuse tensor
+                )
 
-        if greedy_sampled is None:
-            return random_sampled
+        # Then apply EOS forcing if needed
+        force_eos_mask = get_forced_eos_mask(sampling_metadata, self.eos_position)
+        if force_eos_mask is not None:
+            sampled = torch.where(force_eos_mask, self.eos_token_id, sampled)
 
-        sampled = torch.where(
-            sampling_metadata.temperature < _SAMPLING_EPS,
-            greedy_sampled,
-            random_sampled,
-            out=greedy_sampled,  # Reuse tensor
-        )
         return sampled
+
 
     def compute_logprobs(self, logits: torch.Tensor) -> torch.Tensor:
         return logits.log_softmax(dim=-1, dtype=torch.float32)

@@ -116,7 +116,7 @@ def get_bad_tokens_by_length(tokenizer, max_len: int, bad_token_ids: list[int], 
     return bad_tokens
 
 
-def precompute_token_lengths(model_config) -> torch.Tensor:
+def precompute_token_lengths(model_config) -> tuple[torch.Tensor, int]:
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.tokenizer,
         trust_remote_code=model_config.trust_remote_code,
@@ -161,7 +161,8 @@ def precompute_token_lengths(model_config) -> torch.Tensor:
     logger.info(f"Found {len(bad_tokens)} bad tokens, example: {bad_tokens[:5]}")
     logger.info(f"Applied force_length={force_length} to {len(bad_tokens)} bad tokens")
 
-    return token_lengths
+    eos_token_id = tokenizer.eos_token_id
+    return token_lengths, eos_token_id
 
 
 
@@ -228,10 +229,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.encoder_cache_size = encoder_cache_size
 
         # Sampler
-        token_lengths_gpu = precompute_token_lengths(self.model_config).to(
-            self.device
+        token_lengths_gpu, eos_token_id = precompute_token_lengths(self.model_config)
+        token_lengths_gpu = token_lengths_gpu.to(self.device)
+        eos_position = envs.VLLM_EOS_POSITION
+        
+        self.sampler = Sampler(
+            token_lengths_gpu=token_lengths_gpu,
+            eos_token_id=eos_token_id,
+            eos_position=eos_position
         )
-        self.sampler = Sampler(token_lengths_gpu=token_lengths_gpu)
 
         self.eplb_state: Optional[EplbState] = None
         """

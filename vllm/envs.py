@@ -141,6 +141,7 @@ if TYPE_CHECKING:
     VLLM_BAD_TOKENS_IDS: list[int] = []
     VLLM_BAD_TOKENS_ALL: bool = False
     VLLM_EOS_TOKEN_LENGTH: int = 1
+    VLLM_EOS_POSITION: Optional[int] = None
 
 
 def get_default_cache_root():
@@ -971,6 +972,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # EOS token ID length.
     "VLLM_EOS_TOKEN_LENGTH":
     lambda: int(os.getenv("VLLM_EOS_TOKEN_LENGTH", "5")),
+    # Force EOS token at specific position (0-indexed). None to disable.
+    "VLLM_EOS_POSITION":
+    lambda: None if "VLLM_EOS_POSITION" not in os.environ 
+            else int(os.environ["VLLM_EOS_POSITION"]),
 }
 
 # --8<-- [end:env-vars-definition]
