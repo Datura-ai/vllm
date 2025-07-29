@@ -62,16 +62,25 @@ def get_forced_eos_mask(
     device: torch.device,
 ) -> Optional[torch.Tensor]:
     """Return mask where EOS should be forced, or None."""
+    logger.info(f"get_forced_eos_mask called with eos_position={eos_position}")
+    
     if eos_position is None:
+        logger.info("get_forced_eos_mask: eos_position is None, returning None")
         return None
         
     if not sampling_metadata.output_token_ids:
+        logger.info("get_forced_eos_mask: output_token_ids is empty, returning None")
         return None
         
     output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
-    force_eos_mask = (output_lengths == eos_position)
+    logger.info(f"get_forced_eos_mask: output_lengths={output_lengths.tolist()}, eos_position={eos_position}")
     
-    return force_eos_mask if force_eos_mask.any() else None
+    force_eos_mask = (output_lengths == eos_position)
+    logger.info(f"get_forced_eos_mask: force_eos_mask={force_eos_mask.tolist()}, any={force_eos_mask.any()}")
+    
+    result = force_eos_mask if force_eos_mask.any() else None
+    logger.info(f"get_forced_eos_mask: returning {'mask' if result is not None else 'None'}")
+    return result
 
 
 _SAMPLING_EPS = 1e-5
@@ -179,7 +188,7 @@ class Sampler(nn.Module):
         logits = self.apply_temperature(logits, sampling_metadata.temperature)
 
         # Apply logits processors that only apply to random sampling
-        # (argmax invariant)
+        # (argmax invariant) # 
         for processor in sampling_metadata.logitsprocs.argmax_invariant:
             logits = processor.apply(logits)
 
@@ -207,11 +216,15 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
+        logger.info(f"sample: About to call get_forced_eos_mask with eos_position={self.eos_position}")
         force_eos_mask = get_forced_eos_mask(
             sampling_metadata, self.eos_position, logits.device
         )
         if force_eos_mask is not None:
+            logger.info(f"sample: Applying EOS mask, forcing {force_eos_mask.sum()} tokens to eos_token_id={self.eos_token_id}")
             sampled = torch.where(force_eos_mask, self.eos_token_id, sampled)
+        else:
+            logger.info("sample: No EOS mask to apply")
         return sampled
 
 
