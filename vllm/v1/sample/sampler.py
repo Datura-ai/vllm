@@ -202,6 +202,12 @@ class Sampler(nn.Module):
 
         random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
 
+        force_eos_mask = get_forced_eos_mask(
+            sampling_metadata, self.eos_position, logits.device
+        )
+        if force_eos_mask is not None:
+            random_sampled = torch.where(force_eos_mask, self.eos_token_id, random_sampled)
+
         if greedy_sampled is None:
             return random_sampled
 
@@ -211,11 +217,7 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
-        force_eos_mask = get_forced_eos_mask(
-            sampling_metadata, self.eos_position, logits.device
-        )
-        if force_eos_mask is not None:
-            sampled = torch.where(force_eos_mask, self.eos_token_id, sampled)
+
         return sampled
 
 
