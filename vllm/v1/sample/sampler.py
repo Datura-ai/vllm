@@ -59,6 +59,7 @@ def longest_word_sample(
 def get_forced_eos_mask(
     sampling_metadata: SamplingMetadata,
     eos_position: Optional[int],
+    device: torch.device,
 ) -> Optional[torch.Tensor]:
     """Return mask where EOS should be forced, or None."""
     if eos_position is None:
@@ -67,7 +68,7 @@ def get_forced_eos_mask(
     if not sampling_metadata.output_token_ids:
         return None
         
-    output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids])
+    output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
     force_eos_mask = (output_lengths == eos_position)
     
     return force_eos_mask if force_eos_mask.any() else None
@@ -219,7 +220,7 @@ class Sampler(nn.Module):
                 )
 
         # Then apply EOS forcing if needed
-        force_eos_mask = get_forced_eos_mask(sampling_metadata, self.eos_position)
+        force_eos_mask = get_forced_eos_mask(sampling_metadata, self.eos_position, logits.device)
         if force_eos_mask is not None:
             sampled = torch.where(force_eos_mask, self.eos_token_id, sampled)
 

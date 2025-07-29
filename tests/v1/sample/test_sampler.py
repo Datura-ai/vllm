@@ -206,7 +206,9 @@ def test_sampler_presence_penalty(device: str, batch_size: int,
     sampling_metadata.presence_penalties = _create_penalty_tensor(
         batch_size, presence_penalty, torch.device(device))
     sampling_metadata.no_penalties = False
-    sampler = Sampler()
+    # Create dummy token_lengths_gpu and eos_token_id for testing
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
     logits = sampler.apply_penalties(fake_logits, sampling_metadata)
     logits = logits.cpu()
     for batch_idx in range(batch_size):
@@ -256,7 +258,9 @@ def test_sampler_frequency_penalty(device: str, batch_size: int,
         )
     sampling_metadata.output_token_ids = output_token_ids
     sampling_metadata.no_penalties = False
-    sampler = Sampler()
+    # Create dummy token_lengths_gpu and eos_token_id for testing
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
     logits = sampler.apply_penalties(fake_logits, sampling_metadata)
     logits = logits.cpu()
     for batch_idx in range(batch_size):
@@ -304,7 +308,9 @@ def test_sampler_repetition_penalty(device: str, batch_size: int,
     sampling_metadata.repetition_penalties = _create_penalty_tensor(
         batch_size, repetition_penalty, torch.device(device))
     sampling_metadata.no_penalties = False
-    sampler = Sampler()
+    # Create dummy token_lengths_gpu and eos_token_id for testing
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
     logits = sampler.apply_penalties(fake_logits, sampling_metadata)
     logits = logits.cpu()
     for batch_idx in range(batch_size):
@@ -354,7 +360,9 @@ def test_sampler_allowed_token_ids(device: str, batch_size: int,
         device=device,
     )
     sampling_metadata.allowed_token_ids_mask = mask
-    sampler = Sampler()
+    # Create dummy token_lengths_gpu and eos_token_id for testing
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
     logits = sampler.apply_allowed_token_ids(fake_logits, sampling_metadata)
     logits = logits.cpu()
     for batch_idx in range(batch_size):
@@ -391,7 +399,9 @@ def test_sampler_bad_words(device: str, batch_size: int,
         batch_size, VOCAB_SIZE, bad_words_lengths)
     bad_words_last_tokens = _update_output_token_ids_for_bad_words(
         sampling_metadata, VOCAB_SIZE)
-    sampler = Sampler()
+    # Create dummy token_lengths_gpu and eos_token_id for testing
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
     logits = sampler.apply_bad_words(fake_logits, sampling_metadata)
     logits = logits.cpu()
     for batch_idx in range(batch_size):
