@@ -180,9 +180,8 @@ class Sampler(nn.Module):
 
         # Apply logits processors that only apply to random sampling
         # (argmax invariant)
-        if sampling_metadata.logitsprocs is not None:
-            for processor in sampling_metadata.logitsprocs.argmax_invariant:
-                logits = processor.apply(logits)
+        for processor in sampling_metadata.logitsprocs.argmax_invariant:
+            logits = processor.apply(logits)
 
         # Apply top_k and/or top_p.
         # random_sampled = self.topk_topp_sampler(
