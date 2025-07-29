@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
+from vllm.logger import init_logger
 from vllm.utils import is_pin_memory_available
 from vllm.v1.outputs import LogprobsTensors, SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
@@ -63,16 +64,17 @@ def get_forced_eos_mask(
     if eos_position is None:
         return None
         
-    if sampling_metadata.output_lengths is None:
+    if not sampling_metadata.output_token_ids:
         return None
         
-    force_eos_mask = (sampling_metadata.output_lengths == eos_position)
+    output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids])
+    force_eos_mask = (output_lengths == eos_position)
     
     return force_eos_mask if force_eos_mask.any() else None
 
 
 _SAMPLING_EPS = 1e-5
-
+logger = init_logger(__name__)
 
 class Sampler(nn.Module):
 
@@ -83,6 +85,7 @@ class Sampler(nn.Module):
         self.token_lengths_gpu = token_lengths_gpu
         self.eos_token_id = eos_token_id
         self.eos_position = eos_position
+        logger.info(f"starting sampler with {self.eos_token_id=} and {self.eos_position=}")
 
     def forward(
         self,
