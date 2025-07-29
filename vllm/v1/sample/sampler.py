@@ -63,9 +63,11 @@ def get_forced_eos_mask(
 ) -> Optional[torch.Tensor]:
     """Return mask where EOS should be forced, or None."""
     if eos_position is None:
+        logger.info("get_forced_eos_mask: eos_position is None, no mask applied")
         return None
         
     if not sampling_metadata.output_token_ids:
+        logger.info("get_forced_eos_mask: no output token ids, no mask applied")
         return None
         
     output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
