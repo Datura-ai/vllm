@@ -35,7 +35,6 @@ def create_mock_sampling_metadata(
         presence_penalties=torch.zeros(batch_size),
         repetition_penalties=torch.ones(batch_size),
         output_token_ids=output_token_ids,
-        output_lengths=output_lengths,
         allowed_token_ids_mask=None,
         bad_words_token_ids={},
         logitsprocs=LogitsProcessorManager(),
