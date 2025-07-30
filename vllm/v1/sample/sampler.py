@@ -73,7 +73,7 @@ def get_forced_eos_mask(
         return None
         
     output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
-    position_mask = (output_lengths == eos_position)
+    position_mask = (output_lengths >= eos_position)
     
     if not position_mask.any():
         logger.info(f"get_forced_eos_mask: no sequences at position {eos_position}")
