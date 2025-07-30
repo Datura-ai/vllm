@@ -95,10 +95,10 @@ def get_forced_eos_mask(
     force_eos_mask = position_mask & (max_logprobs < threshold)
     result = force_eos_mask if force_eos_mask.any() else None
     
-    logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, "
-                f"position_mask={position_mask.tolist()}, max_logprobs={max_logprobs[position_mask].tolist()}, "
-                f"threshold={threshold}, final_mask={force_eos_mask.tolist()}, "
-                f"result={'applied' if result is not None else 'none'}")
+    # logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, "
+    #             f"position_mask={position_mask.tolist()}, max_logprobs={max_logprobs[position_mask].tolist()}, "
+    #             f"threshold={threshold}, final_mask={force_eos_mask.tolist()}, "
+    #             f"result={'applied' if result is not None else 'none'}")
     return result
 
 
