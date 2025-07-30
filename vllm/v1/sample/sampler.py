@@ -63,7 +63,12 @@ def get_forced_eos_mask(
     logits: torch.Tensor,
     threshold: float = -0.7,
 ) -> Optional[torch.Tensor]:
-    """Return mask where EOS should be forced based on max logit threshold, or None."""
+    """Return mask where EOS should be forced based on max logit threshold, or None.
+    
+    Forces EOS when:
+    - Sequence length >= eos_position AND 
+    - Max logit < threshold (default -0.7, meaning low model confidence)
+    """
     if eos_position is None:
         logger.info("get_forced_eos_mask: eos_position is None, no mask applied")
         return None
@@ -79,10 +84,11 @@ def get_forced_eos_mask(
         logger.info(f"get_forced_eos_mask: no sequences at position {eos_position}")
         return None
     
-    # Get max logits for each sequence
+    # Get max logit for each sequence (before softmax)
     max_logits, _ = torch.max(logits, dim=-1)
     
-    # Apply EOS only where position matches AND max logit < threshold
+    # Apply EOS only where position >= eos_position AND max logit < threshold
+    # Threshold -0.7 means: force EOS when model is not confident about any token
     force_eos_mask = position_mask & (max_logits < threshold)
     result = force_eos_mask if force_eos_mask.any() else None
     

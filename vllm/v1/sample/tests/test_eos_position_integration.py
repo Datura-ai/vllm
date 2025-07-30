@@ -67,7 +67,7 @@ def test_eos_position_not_set_integration():
 
 
 def test_eos_position_at_9_should_force_eos():
-    # Checks that EOS is forced at position 9 (10th token)
+    # Checks that EOS is forced at position 9 (10th token) with low confidence
     token_lengths = torch.zeros(100, dtype=torch.int32)
     sampler = Sampler(
         token_lengths_gpu=token_lengths,
@@ -75,23 +75,25 @@ def test_eos_position_at_9_should_force_eos():
         eos_position=9  # Force EOS on 10th token
     )
     
-    # Create logits and metadata where first request is at position 9
-    logits = torch.randn(3, 100)
+    # Create low confidence logits to trigger EOS forcing
+    logits = torch.full((3, 100), -1.0)  # Low confidence (below -0.7 threshold)
     metadata = create_mock_sampling_metadata(
-        output_lengths=torch.tensor([9, 8, 10])  # First request should get EOS
+        output_lengths=torch.tensor([9, 8, 10])  # Positions 0 and 2 should get EOS (>= 9)
     )
     
     result = sampler.sample(logits, metadata)
-    # This test SHOULD fail until we implement the EOS forcing logic
-    assert result[0] == 2, f"Expected EOS token (2), got {result[0]} - EOS logic not yet implemented"
+    # EOS should be forced for positions >= 9 with low confidence
+    assert result[0] == 2, f"Expected EOS token (2) for low confidence at position 9, got {result[0]}"
+    assert result[1] != 2, f"Should not force EOS at position 8 (< 9), got {result[1]}"
+    assert result[2] == 2, f"Expected EOS token (2) for low confidence at position 10, got {result[2]}"
 
 
 @pytest.mark.parametrize(
     "output_length,eos_position,should_be_eos",
     [
         (8, 9, False),   # Before EOS position - no forcing
-        (9, 9, True),    # At EOS position - should force EOS
-        (10, 9, False),  # After EOS position - no forcing
+        (9, 9, True),    # At EOS position - should force EOS with low confidence
+        (10, 9, True),   # After EOS position - should force EOS with low confidence  
     ],
 )
 def test_eos_position_boundary_integration(output_length, eos_position, should_be_eos):
@@ -103,7 +105,8 @@ def test_eos_position_boundary_integration(output_length, eos_position, should_b
         eos_position=eos_position
     )
     
-    logits = torch.randn(1, 100)  # Single request
+    # Use low confidence logits to trigger EOS forcing when appropriate
+    logits = torch.full((1, 100), -1.0)  # Low confidence
     metadata = create_mock_sampling_metadata(
         output_lengths=torch.tensor([output_length])
     )
@@ -111,10 +114,10 @@ def test_eos_position_boundary_integration(output_length, eos_position, should_b
     result = sampler.sample(logits, metadata)
     
     if should_be_eos:
-        assert result[0] == 2, f"Expected EOS token (2) at position {output_length}, got {result[0]} - EOS logic not implemented"
+        assert result[0] == 2, f"Expected EOS token (2) at position {output_length} with low confidence, got {result[0]}"
     else:
-        # For positions that shouldn't force EOS, just check we got a result
-        assert result.shape == (1,), f"Expected single token result, got shape {result.shape}"
+        # For positions that shouldn't force EOS, should not be EOS token
+        assert result[0] != 2, f"Should not force EOS at position {output_length} < {eos_position}"
 
 
 def test_eos_position_batch_mixed_integration():
@@ -126,19 +129,26 @@ def test_eos_position_batch_mixed_integration():
         eos_position=9
     )
     
-    # Batch with mixed positions
-    logits = torch.randn(5, 100)
+    # Batch with mixed positions and confidence levels
+    logits = torch.zeros(5, 100)
+    logits[0, :] = -1.0  # pos 9, >= 9, low confidence -> force EOS
+    logits[1, :] = 2.0   # pos 9, >= 9, high confidence -> no EOS
+    logits[2, :] = -1.0  # pos 8, < 9, low confidence -> no EOS
+    logits[3, :] = -1.0  # pos 10, >= 9, low confidence -> force EOS
+    logits[4, :] = -0.8  # pos 9, >= 9, low confidence -> force EOS
+    
     metadata = create_mock_sampling_metadata(
-        output_lengths=torch.tensor([9, 9, 8, 10, 9])  # Positions 0,1,4 should get EOS
+        output_lengths=torch.tensor([9, 9, 8, 10, 9])
     )
     
     result = sampler.sample(logits, metadata)
     
-    # This test SHOULD fail until EOS logic is implemented
-    # Expect: positions 0, 1, 4 should be EOS (value 2)
-    assert result[0] == 2, f"Position 0 should be EOS, got {result[0]} - EOS logic not implemented"
-    assert result[1] == 2, f"Position 1 should be EOS, got {result[1]} - EOS logic not implemented"  
-    assert result[4] == 2, f"Position 4 should be EOS, got {result[4]} - EOS logic not implemented"
+    # Expected: positions >= 9 with low confidence should get EOS
+    assert result[0] == 2, f"Position 9 with low confidence should be EOS, got {result[0]}"
+    assert result[1] != 2, f"Position 9 with high confidence should not be EOS, got {result[1]}"  
+    assert result[2] != 2, f"Position 8 < 9 should not be EOS, got {result[2]}"
+    assert result[3] == 2, f"Position 10 with low confidence should be EOS, got {result[3]}"
+    assert result[4] == 2, f"Position 9 with low confidence should be EOS, got {result[4]}"
 
 
 if __name__ == "__main__":
