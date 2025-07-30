@@ -60,8 +60,10 @@ def get_forced_eos_mask(
     sampling_metadata: SamplingMetadata,
     eos_position: Optional[int],
     device: torch.device,
+    logits: torch.Tensor,
+    threshold: float = -0.7,
 ) -> Optional[torch.Tensor]:
-    """Return mask where EOS should be forced, or None."""
+    """Return mask where EOS should be forced based on max logit threshold, or None."""
     if eos_position is None:
         logger.info("get_forced_eos_mask: eos_position is None, no mask applied")
         return None
@@ -71,10 +73,23 @@ def get_forced_eos_mask(
         return None
         
     output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
-    force_eos_mask = (output_lengths == eos_position)
+    position_mask = (output_lengths == eos_position)
+    
+    if not position_mask.any():
+        logger.info(f"get_forced_eos_mask: no sequences at position {eos_position}")
+        return None
+    
+    # Get max logits for each sequence
+    max_logits, _ = torch.max(logits, dim=-1)
+    
+    # Apply EOS only where position matches AND max logit < threshold
+    force_eos_mask = position_mask & (max_logits < threshold)
     result = force_eos_mask if force_eos_mask.any() else None
     
-    logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, mask={force_eos_mask.tolist()}, result={'applied' if result is not None else 'none'}")
+    logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, "
+                f"position_mask={position_mask.tolist()}, max_logits={max_logits[position_mask].tolist()}, "
+                f"threshold={threshold}, final_mask={force_eos_mask.tolist()}, "
+                f"result={'applied' if result is not None else 'none'}")
     return result
 
 
@@ -193,7 +208,8 @@ class Sampler(nn.Module):
         #     sampling_metadata.generators,
         #     sampling_metadata.top_k,
         #     sampling_metadata.top_p,
-        # )
+        # )   
+        #
         filtered_logits = apply_top_k_top_p(
             logits,
             sampling_metadata.top_k,
@@ -203,7 +219,7 @@ class Sampler(nn.Module):
         random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
 
         force_eos_mask = get_forced_eos_mask(
-            sampling_metadata, self.eos_position, logits.device
+            sampling_metadata, self.eos_position, logits.device, filtered_logits
         )
         if force_eos_mask is not None:
             random_sampled = torch.where(force_eos_mask, self.eos_token_id, random_sampled)
