@@ -60,14 +60,14 @@ def test_eos_forced_when_max_logit_below_threshold():
     metadata = create_sampling_metadata([5, 7, 8, 9])
     device = torch.device("cpu")
     
-    # Create logits that result in specific max log probabilities
+    # Create logits where positions >= 7 have different max logits
     logits = torch.zeros(4, 100)
-    logits[0, 0] = 5.0   # pos 5, < eos_position -> no EOS regardless
-    logits[1, 0] = 0.0   # pos 7, >= eos_position, logprob ≈ -4.6 < -0.7 -> force EOS
-    logits[2, 0] = 0.0   # pos 8, >= eos_position, logprob ≈ -4.6 < -0.7 -> force EOS  
-    logits[3, 0] = 5.0   # pos 9, >= eos_position, logprob ≈ -0.51 > -0.7 -> no EOS
+    logits[0, :] = 1.0   # pos 5, < eos_position, high logits - no EOS
+    logits[1, :] = -1.0  # pos 7, >= eos_position, low logits - force EOS
+    logits[2, :] = -0.8  # pos 8, >= eos_position, low logits - force EOS
+    logits[3, :] = 0.5   # pos 9, >= eos_position, high logits - no EOS
     
-    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold=-0.7)
     
     expected_mask = torch.tensor([False, True, True, False])
     assert torch.equal(mask, expected_mask)
@@ -78,11 +78,11 @@ def test_eos_not_forced_when_max_logit_above_threshold():
     metadata = create_sampling_metadata([5, 7, 8, 9])
     device = torch.device("cpu")
     
-    # Create logits where all sequences have high confidence (max logprob > -0.7)
+    # Create logits where all have high max values
     logits = torch.zeros(4, 100)
-    logits[:, 0] = 5.0  # This gives max logprob ≈ -0.51 > -0.7
+    logits[:, :] = -0.5  # Above threshold of -0.7
     
-    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold=-0.7)
     
     # No sequences should be forced to EOS (high confidence)
     assert mask is None
@@ -93,15 +93,15 @@ def test_mixed_batch_with_different_thresholds():
     metadata = create_sampling_metadata([6, 7, 7, 8, 10])
     device = torch.device("cpu")
     
-    # Create varied logits for different max log probabilities
+    # Create varied logits
     logits = torch.zeros(5, 100)
-    logits[0, 0] = 5.0   # pos 6, < eos_position - no EOS
-    logits[1, 0] = 5.0   # pos 7, >= eos_position, logprob ≈ -0.51 > -0.7 - no EOS
-    logits[2, 0] = 0.0   # pos 7, >= eos_position, logprob ≈ -4.6 < -0.7 - force EOS
-    logits[3, 0] = 0.0   # pos 8, >= eos_position, logprob ≈ -4.6 < -0.7 - force EOS
-    logits[4, 0] = 10.0  # pos 10, >= eos_position, logprob ≈ -0.0045 > -0.7 - no EOS
+    logits[0, :] = 0.0   # pos 6, < eos_position - no EOS
+    logits[1, :] = -0.6  # pos 7, >= eos_position, above threshold - no EOS
+    logits[2, :] = -0.9  # pos 7, >= eos_position, below threshold - force EOS
+    logits[3, :] = -1.5  # pos 8, >= eos_position, below threshold - force EOS
+    logits[4, :] = -0.2  # pos 10, >= eos_position, above threshold - no EOS
     
-    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold=-0.7)
     
     expected_mask = torch.tensor([False, False, True, True, False])
     assert torch.equal(mask, expected_mask)
@@ -113,12 +113,12 @@ def test_custom_threshold():
     device = torch.device("cpu")
     
     logits = torch.zeros(3, 100)
-    logits[0, 0] = 10.0  # logprob ≈ -0.0045 > -0.4 - no EOS
-    logits[1, 0] = 5.0   # logprob ≈ -0.51 < -0.4 - force EOS
-    logits[2, 0] = 0.0   # logprob ≈ -4.6 < -0.4 - force EOS
+    logits[0, :] = -0.3
+    logits[1, :] = -0.5
+    logits[2, :] = -0.7
     
     # With threshold -0.4, only the last two should get EOS
-    mask = get_forced_eos_mask(metadata, 5, device, logits, threshold_base=-0.4, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 5, device, logits, threshold=-0.4)
     expected_mask = torch.tensor([False, True, True])
     assert torch.equal(mask, expected_mask)
 
@@ -128,16 +128,13 @@ def test_edge_case_exactly_at_threshold():
     metadata = create_sampling_metadata([7])
     device = torch.device("cpu")
     
-    # Since it's hard to get exactly -0.7, let's test the boundary behavior
-    # We'll use a logit that gives logprob slightly above -0.7
     logits = torch.zeros(1, 100)
-    logits[0, 0] = 4.5  # This gives logprob ≈ -0.79, which is < -0.7
+    logits[0, :] = -0.7  # Exactly at threshold
     
-    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold=-0.7)
     
-    # Should force EOS since logprob < threshold
-    expected_mask = torch.tensor([True])
-    assert torch.equal(mask, expected_mask)
+    # Should NOT force EOS (< threshold, not <=)
+    assert mask is None
 
 
 def test_position_threshold_boundary():
@@ -145,10 +142,10 @@ def test_position_threshold_boundary():
     metadata = create_sampling_metadata([6, 7, 8])
     device = torch.device("cpu")
     
-    # All have low confidence (logprob < -0.7)
-    logits = torch.zeros(3, 100)  # All logits 0 give logprob ≈ -4.6
+    # All have low confidence but different positions relative to threshold
+    logits = torch.full((3, 100), -1.0)  # All below threshold
     
-    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 7, device, logits, threshold=-0.7)
     
     # Only positions >= 7 should get EOS
     expected_mask = torch.tensor([False, True, True])
@@ -168,7 +165,7 @@ def test_position_threshold_parametrized(eos_position, output_lengths, expected_
     # All sequences have low confidence
     logits = torch.full((len(output_lengths), 100), -1.0)
     
-    mask = get_forced_eos_mask(metadata, eos_position, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, eos_position, device, logits, threshold=-0.7)
     
     expected_mask = torch.tensor(expected_positions)
     if expected_mask.any():
@@ -186,25 +183,7 @@ def test_realistic_production_scenario():
     logits = torch.zeros(1, 100)
     logits[0, 42] = 25.0  # Extremely high confidence for one token
     
-    mask = get_forced_eos_mask(metadata, 10, device, logits, threshold_base=-0.7, threshold_coeff=0.0)
+    mask = get_forced_eos_mask(metadata, 10, device, logits, threshold=-0.7)
     
     # Should NOT force EOS due to high confidence
     assert mask is None
-
-
-def test_dynamic_threshold_based_on_length():
-    """Test dynamic threshold that changes based on sequence length."""
-    metadata = create_sampling_metadata([10, 50, 100, 200])
-    device = torch.device("cpu")
-    
-    # Create logits for different behaviors based on dynamic thresholds
-    logits = torch.zeros(4, 100)
-    logits[0, 0] = 5.0   # logprob ≈ -0.51, threshold@10 = -0.7  -> -0.51 > -0.7 (no EOS)
-    logits[1, 0] = 4.2   # logprob ≈ -0.96, threshold@50 = -0.66 -> -0.96 < -0.66 (force EOS)
-    logits[2, 0] = 5.5   # logprob ≈ -0.42, threshold@100 = -0.61 -> -0.42 > -0.61 (no EOS)
-    logits[3, 0] = 2.0   # logprob ≈ -2.66, threshold@200 = -0.51 -> -2.66 < -0.51 (force EOS)
-    
-    mask = get_forced_eos_mask(metadata, 10, device, logits, threshold_base=-0.71, threshold_coeff=0.001)
-    
-    expected_mask = torch.tensor([False, True, False, True])
-    assert torch.equal(mask, expected_mask)
