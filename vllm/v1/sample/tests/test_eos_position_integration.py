@@ -132,7 +132,8 @@ def test_eos_position_batch_mixed_integration():
     # Batch with mixed positions and confidence levels
     logits = torch.zeros(5, 100)
     logits[0, :] = -1.0  # pos 9, >= 9, low confidence -> force EOS
-    logits[1, :] = 2.0   # pos 9, >= 9, high confidence -> no EOS
+    logits[1, :] = 0.0   # pos 9, >= 9, high confidence case
+    logits[1, 10] = 5.0  # Make token 10 have high confidence (> 99% probability)
     logits[2, :] = -1.0  # pos 8, < 9, low confidence -> no EOS
     logits[3, :] = -1.0  # pos 10, >= 9, low confidence -> force EOS
     logits[4, :] = -0.8  # pos 9, >= 9, low confidence -> force EOS
