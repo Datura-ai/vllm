@@ -648,19 +648,25 @@ class InputBatch:
                        self.allowed_token_ids_mask, num_reqs)
             allowed_token_ids_mask = self.allowed_token_ids_mask[:num_reqs]
 
-        # Collect extra_args: start with environment variables as defaults
-        extra_args = {
+        # Build per-request extra_args mapping
+        extra_args_per_request = {}
+        env_defaults = {
             "eos_position": envs.VLLM_EOS_POSITION,
             "eos_token_length": envs.VLLM_EOS_TOKEN_LENGTH,
             "longest_word_enable": envs.VLLM_LONGEST_WORD_ENABLE,
             "forced_eos_enable": envs.VLLM_FORCED_EOS_ENABLE,
         }
         
-        # Override with request-specific extra_args (POST parameters have priority over env vars)
+        # Build per-request extra_args with proper isolation
         for req_index in range(num_reqs):
+            req_extra_args = env_defaults.copy()  # Start with env defaults
             if req_index in self.req_extra_args:
-                req_extra_args = self.req_extra_args[req_index]
-                extra_args.update(req_extra_args)
+                # Override with request-specific parameters
+                req_extra_args.update(self.req_extra_args[req_index])
+            extra_args_per_request[req_index] = req_extra_args
+        
+        # Keep legacy extra_args for backward compatibility (use env defaults)
+        extra_args = env_defaults.copy()
 
         return SamplingMetadata(
             temperature=temperature,
@@ -680,6 +686,7 @@ class InputBatch:
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
             extra_args=extra_args,
+            extra_args_per_request=extra_args_per_request,
         )
 
     @property

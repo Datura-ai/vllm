@@ -44,3 +44,6 @@ class SamplingMetadata:
 
     # Additional request parameters from SamplingParams.extra_args
     extra_args: Optional[dict[str, Any]] = None
+    
+    # Per-request extra_args: req_index -> extra_args
+    extra_args_per_request: Optional[dict[int, dict[str, Any]]] = None

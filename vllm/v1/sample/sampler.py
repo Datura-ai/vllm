@@ -107,10 +107,27 @@ def get_forced_eos_mask(
         return None
         
     output_lengths = torch.tensor([len(tokens) for tokens in sampling_metadata.output_token_ids], device=device)
-    position_mask = (output_lengths >= eos_position)
+    
+    # Use per-request eos_position if available, otherwise use default
+    batch_size = len(sampling_metadata.output_token_ids)
+    eos_positions = []
+    
+    for req_index in range(batch_size):
+        req_eos_position = eos_position  # Default
+        if (sampling_metadata.extra_args_per_request and 
+            req_index in sampling_metadata.extra_args_per_request):
+            req_extra_args = sampling_metadata.extra_args_per_request[req_index]
+            req_eos_position = req_extra_args.get("eos_position", eos_position)
+        eos_positions.append(req_eos_position)
+    
+    # Create per-request position masks
+    position_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+    for i, req_eos_pos in enumerate(eos_positions):
+        if req_eos_pos is not None:
+            position_mask[i] = output_lengths[i] >= req_eos_pos
     
     if not position_mask.any():
-        logger.info(f"get_forced_eos_mask: no sequences at position {eos_position}")
+        logger.info(f"get_forced_eos_mask: no sequences meet eos position criteria")
         return None
     
     # Convert logits to log probabilities
@@ -126,9 +143,9 @@ def get_forced_eos_mask(
     force_eos_mask = position_mask & (max_logprobs < dynamic_thresholds)
     result = force_eos_mask if force_eos_mask.any() else None
     
-    # logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, "
-    #             f"position_mask={position_mask.tolist()}, max_logprobs={max_logprobs[position_mask].tolist()}, "
-    #             f"dynamic_thresholds={dynamic_thresholds[position_mask].tolist()}, "
+    # logger.info(f"get_forced_eos_mask: eos_positions={eos_positions}, lengths={output_lengths.tolist()}, "
+    #             f"position_mask={position_mask.tolist()}, max_logprobs={max_logprobs.tolist()}, "
+    #             f"dynamic_thresholds={dynamic_thresholds.tolist()}, "
     #             f"threshold_base={threshold_base}, threshold_coeff={threshold_coeff}, "
     #             f"final_mask={force_eos_mask.tolist()}, "
     #             f"result={'applied' if result is not None else 'none'}")
@@ -254,6 +271,7 @@ class Sampler(nn.Module):
         #
 
         # Check if longest word sampling is enabled
+        # Use environment default, can be overridden by extra_args
         longest_word_enable = True
         if sampling_metadata.extra_args:
             longest_word_enable = sampling_metadata.extra_args.get("longest_word_enable", True)
@@ -282,12 +300,15 @@ class Sampler(nn.Module):
                 sampling_metadata.top_p,
             )
 
-        # Check if forced EOS is enabled and get EOS position from extra_args
+        # Check if forced EOS is enabled 
+        # Use environment default, can be overridden by extra_args
         forced_eos_enable = True
-        eos_position = self.eos_position
         if sampling_metadata.extra_args:
             forced_eos_enable = sampling_metadata.extra_args.get("forced_eos_enable", True)
-            eos_position = sampling_metadata.extra_args.get("eos_position", self.eos_position)
+        
+        # For eos_position, we'll use per-request values in get_forced_eos_mask
+        # Default eos_position from environment/initialization
+        eos_position = self.eos_position
 
         # Log EOS forcing parameters
         logger.info(f"EOS forcing: enabled={forced_eos_enable}, position={eos_position}, "
