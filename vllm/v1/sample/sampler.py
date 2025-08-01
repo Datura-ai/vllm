@@ -81,6 +81,45 @@ def longest_word_sample(
 
 
 
+def get_param(
+    sampling_metadata: SamplingMetadata,
+    param_name: str,
+    default_value,
+    req_index: int = 0
+):
+    """Get parameter value with priority: per-request > legacy > default.
+    
+    Args:
+        sampling_metadata: Sampling metadata containing parameters
+        param_name: Name of parameter to retrieve
+        default_value: Default value if parameter not found
+        req_index: Request index for per-request parameters
+        
+    Returns:
+        Parameter value with proper type conversion
+    """
+    # Priority 1: Per-request parameters
+    if (sampling_metadata.extra_args_per_request and 
+        req_index in sampling_metadata.extra_args_per_request):
+        req_extra_args = sampling_metadata.extra_args_per_request[req_index]
+        if param_name in req_extra_args:
+            value = req_extra_args[param_name]
+            # Convert 0/1 to boolean for boolean parameters
+            if isinstance(default_value, bool):
+                return bool(value)
+            return value
+    
+    # Priority 2: Legacy batch-level parameters
+    if sampling_metadata.extra_args and param_name in sampling_metadata.extra_args:
+        value = sampling_metadata.extra_args[param_name]
+        if isinstance(default_value, bool):
+            return bool(value)
+        return value
+    
+    # Priority 3: Default value
+    return default_value
+
+
 def get_forced_eos_mask(
     sampling_metadata: SamplingMetadata,
     eos_position: Optional[int],
@@ -113,11 +152,7 @@ def get_forced_eos_mask(
     eos_positions = []
     
     for req_index in range(batch_size):
-        req_eos_position = eos_position  # Default
-        if (sampling_metadata.extra_args_per_request and 
-            req_index in sampling_metadata.extra_args_per_request):
-            req_extra_args = sampling_metadata.extra_args_per_request[req_index]
-            req_eos_position = req_extra_args.get("eos_position", eos_position)
+        req_eos_position = get_param(sampling_metadata, "eos_position", eos_position, req_index)
         eos_positions.append(req_eos_position)
     
     # Create per-request position masks
@@ -271,17 +306,14 @@ class Sampler(nn.Module):
         #
 
         # Check if longest word sampling is enabled
-        # Use environment default, can be overridden by extra_args
-        longest_word_enable = True
-        if sampling_metadata.extra_args:
-            longest_word_enable = sampling_metadata.extra_args.get("longest_word_enable", True)
+        longest_word_enable = get_param(sampling_metadata, "longest_word_enable", True, req_index=0)
+        logger.info(f"Using longest_word_enable: {longest_word_enable}")
 
-        # Log sampling parameters for monitoring and debugging
-        logger.info(f"Sampler parameters: longest_word_enable={longest_word_enable}, "
-                   f"temperature_mean={sampling_metadata.temperature.mean().item() if sampling_metadata.temperature is not None else 'N/A'}, "
-                   f"num_requests={logits.shape[0]}")
+        # Debug logging
         if sampling_metadata.extra_args:
-            logger.info(f"Extra args: {sampling_metadata.extra_args}")
+            logger.info(f"Legacy extra args: {sampling_metadata.extra_args}")
+        if sampling_metadata.extra_args_per_request:
+            logger.info(f"Per-request extra args: {sampling_metadata.extra_args_per_request}")
 
         filtered_logits = None
         if longest_word_enable:
@@ -300,19 +332,14 @@ class Sampler(nn.Module):
                 sampling_metadata.top_p,
             )
 
-        # Check if forced EOS is enabled 
-        # Use environment default, can be overridden by extra_args
-        forced_eos_enable = True
-        if sampling_metadata.extra_args:
-            forced_eos_enable = sampling_metadata.extra_args.get("forced_eos_enable", True)
+        # Check if forced EOS is enabled
+        forced_eos_enable = get_param(sampling_metadata, "forced_eos_enable", True, req_index=0)
+        logger.info(f"Using forced_eos_enable: {forced_eos_enable}")
         
         # For eos_position, we'll use per-request values in get_forced_eos_mask
         # Default eos_position from environment/initialization
         eos_position = self.eos_position
 
-        # Log EOS forcing parameters
-        logger.info(f"EOS forcing: enabled={forced_eos_enable}, position={eos_position}, "
-                   f"eos_token_id={self.eos_token_id}")
 
         if forced_eos_enable:
             logits_for_eos = filtered_logits if filtered_logits is not None else logits
@@ -321,15 +348,9 @@ class Sampler(nn.Module):
             )
             if force_eos_mask is not None:
                 eos_forced_count = force_eos_mask.sum().item()
-                logger.info(f"EOS forced for {eos_forced_count}/{force_eos_mask.shape[0]} requests")
                 random_sampled = torch.where(force_eos_mask, self.eos_token_id, random_sampled)
-            else:
-                logger.info("No EOS forcing applied (mask is None)")
 
         if greedy_sampled is None:
-            # Log final sampling stats for random-only case
-            unique_tokens = torch.unique(random_sampled).numel()
-            logger.info(f"Final sampling (random-only): {unique_tokens} unique tokens generated")
             return random_sampled
 
         sampled = torch.where(
@@ -338,13 +359,6 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
-
-        # Log final sampling statistics
-        greedy_count = (sampling_metadata.temperature < _SAMPLING_EPS).sum().item()
-        random_count = logits.shape[0] - greedy_count
-        unique_tokens = torch.unique(sampled).numel()
-        logger.info(f"Final sampling: {greedy_count} greedy, {random_count} random, "
-                   f"{unique_tokens} unique tokens generated")
 
         return sampled
 
