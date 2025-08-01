@@ -56,7 +56,7 @@ def longest_word_sample(
     # logger.info(f"Input data: logits.shape={list(logits.shape)}, top_k={top_k}")
     # logger.info(f"Detailed breakdown for each sequence in the batch:")
     #
-    # logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+    # logprobs = logits.log_softmax(dim=-1, dtype=torch.float32)
     # topk_logprobs = logprobs.gather(-1, topk_indices)  # [batch_size, top_k]
     #
     # batch_size = logits.size(0)
@@ -86,13 +86,17 @@ def get_forced_eos_mask(
     eos_position: Optional[int],
     device: torch.device,
     logits: torch.Tensor,
-    threshold: float = -0.7,
+    threshold_base: float = -0.71,
+    threshold_coeff: float = 0.001,
 ) -> Optional[torch.Tensor]:
     """Return mask where EOS should be forced based on max log probability threshold, or None.
     
     Forces EOS when:
     - Sequence length >= eos_position AND 
-    - Max log probability < threshold (default -0.7 ≈ 50% confidence)
+    - Max log probability < dynamic threshold
+
+    Dynamic threshold = threshold_base + threshold_coeff * sequence_length
+    Default: -0.71 + 0.001 * length (e.g., -0.7 at 10 chars, -0.61 at 100 chars)
     """
     if eos_position is None:
         logger.info("get_forced_eos_mask: eos_position is None, no mask applied")
@@ -115,14 +119,18 @@ def get_forced_eos_mask(
     # Get max log probability for each sequence
     max_logprobs, _ = torch.max(logprobs, dim=-1)
     
-    # Apply EOS only where position >= eos_position AND max logprob < threshold
-    # Threshold -0.7 means: force EOS when max probability < 50% (log(0.5) ≈ -0.693)
-    force_eos_mask = position_mask & (max_logprobs < threshold)
+    # Calculate dynamic threshold for each sequence based on its length
+    dynamic_thresholds = threshold_base + threshold_coeff * output_lengths.float()
+
+    # Apply EOS only where position >= eos_position AND max logprob < dynamic threshold
+    force_eos_mask = position_mask & (max_logprobs < dynamic_thresholds)
     result = force_eos_mask if force_eos_mask.any() else None
     
     # logger.info(f"get_forced_eos_mask: pos={eos_position}, lengths={output_lengths.tolist()}, "
     #             f"position_mask={position_mask.tolist()}, max_logprobs={max_logprobs[position_mask].tolist()}, "
-    #             f"threshold={threshold}, final_mask={force_eos_mask.tolist()}, "
+    #             f"dynamic_thresholds={dynamic_thresholds[position_mask].tolist()}, "
+    #             f"threshold_base={threshold_base}, threshold_coeff={threshold_coeff}, "
+    #             f"final_mask={force_eos_mask.tolist()}, "
     #             f"result={'applied' if result is not None else 'none'}")
     return result
 
@@ -249,7 +257,7 @@ class Sampler(nn.Module):
         longest_word_enable = True
         if sampling_metadata.extra_args:
             longest_word_enable = sampling_metadata.extra_args.get("longest_word_enable", True)
-            
+
         # Log sampling parameters for monitoring and debugging
         logger.info(f"Sampler parameters: longest_word_enable={longest_word_enable}, "
                    f"temperature_mean={sampling_metadata.temperature.mean().item() if sampling_metadata.temperature is not None else 'N/A'}, "
@@ -280,7 +288,7 @@ class Sampler(nn.Module):
         if sampling_metadata.extra_args:
             forced_eos_enable = sampling_metadata.extra_args.get("forced_eos_enable", True)
             eos_position = sampling_metadata.extra_args.get("eos_position", self.eos_position)
-            
+
         # Log EOS forcing parameters
         logger.info(f"EOS forcing: enabled={forced_eos_enable}, position={eos_position}, "
                    f"eos_token_id={self.eos_token_id}")
@@ -309,7 +317,7 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
-        
+
         # Log final sampling statistics
         greedy_count = (sampling_metadata.temperature < _SAMPLING_EPS).sum().item()
         random_count = logits.shape[0] - greedy_count
