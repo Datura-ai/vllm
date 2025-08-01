@@ -286,8 +286,9 @@ class Sampler(nn.Module):
                    f"eos_token_id={self.eos_token_id}")
 
         if forced_eos_enable:
+            logits_for_eos = filtered_logits if filtered_logits is not None else logits
             force_eos_mask = get_forced_eos_mask(
-                sampling_metadata, eos_position, logits.device, filtered_logits or logits
+                sampling_metadata, eos_position, logits.device, logits_for_eos
             )
             if force_eos_mask is not None:
                 eos_forced_count = force_eos_mask.sum().item()
