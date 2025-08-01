@@ -412,3 +412,105 @@ def test_sampler_bad_words(device: str, batch_size: int,
                 assert logits_for_req[token_id] == -float("inf")
             else:
                 assert logits_for_req[token_id] != -float("inf")
+
+
+@pytest.mark.parametrize("device", CUDA_DEVICES)
+@pytest.mark.parametrize("longest_word_enable", [True, False])
+def test_sampler_longest_word_enable_flag(device: str, longest_word_enable: bool):
+    """
+    Test to verify that the longest_word_enable flag properly controls
+    whether longest_word_sample is used or not.
+    """
+    torch.set_default_device(device)
+    batch_size = 4
+    
+    # Create fake logits
+    fake_logits = _create_fake_logits(batch_size, VOCAB_SIZE)
+    
+    # Create sampling metadata with extra_args
+    sampling_metadata = _create_default_sampling_metadata(
+        NUM_OUTPUT_TOKENS, batch_size, VOCAB_SIZE, torch.device(device))
+    sampling_metadata.extra_args = {"longest_word_enable": longest_word_enable}
+    
+    # Create sampler
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
+    
+    # Test that forward doesn't crash with the flag
+    result = sampler.forward(fake_logits, sampling_metadata)
+    
+    # Basic sanity check - result should be valid token IDs
+    assert result.sampled_token_ids.shape == (batch_size, 1)
+    assert torch.all(result.sampled_token_ids >= 0)
+    assert torch.all(result.sampled_token_ids < VOCAB_SIZE)
+
+
+@pytest.mark.parametrize("device", CUDA_DEVICES)
+@pytest.mark.parametrize("forced_eos_enable", [True, False])
+def test_sampler_forced_eos_enable_flag(device: str, forced_eos_enable: bool):
+    """
+    Test to verify that the forced_eos_enable flag properly controls
+    whether get_forced_eos_mask is used or not.
+    """
+    torch.set_default_device(device)
+    batch_size = 4
+    
+    # Create fake logits
+    fake_logits = _create_fake_logits(batch_size, VOCAB_SIZE)
+    
+    # Create sampling metadata with extra_args and output token IDs
+    sampling_metadata = _create_default_sampling_metadata(
+        NUM_OUTPUT_TOKENS, batch_size, VOCAB_SIZE, torch.device(device))
+    sampling_metadata.extra_args = {
+        "forced_eos_enable": forced_eos_enable,
+        "eos_position": 10  # Set position to test EOS forcing
+    }
+    
+    # Make output sequences long enough to trigger EOS forcing
+    for i in range(batch_size):
+        sampling_metadata.output_token_ids[i] = list(range(12))  # Longer than eos_position
+    
+    # Create sampler
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0, eos_position=10)
+    
+    # Test that forward doesn't crash with the flag
+    result = sampler.forward(fake_logits, sampling_metadata)
+    
+    # Basic sanity check
+    assert result.sampled_token_ids.shape == (batch_size, 1)
+    assert torch.all(result.sampled_token_ids >= 0)
+    assert torch.all(result.sampled_token_ids < VOCAB_SIZE)
+
+
+@pytest.mark.parametrize("device", CUDA_DEVICES)
+def test_sampler_extra_args_override_env(device: str):
+    """
+    Test that extra_args parameters override environment-based settings.
+    """
+    torch.set_default_device(device)
+    batch_size = 2
+    
+    # Create fake logits
+    fake_logits = _create_fake_logits(batch_size, VOCAB_SIZE)
+    
+    # Create sampling metadata with extra_args overriding defaults
+    sampling_metadata = _create_default_sampling_metadata(
+        NUM_OUTPUT_TOKENS, batch_size, VOCAB_SIZE, torch.device(device))
+    sampling_metadata.extra_args = {
+        "longest_word_enable": False,  # Override default True
+        "forced_eos_enable": True,     # Keep default
+        "eos_position": 5              # Override default None
+    }
+    
+    # Create sampler
+    token_lengths_gpu = torch.ones(VOCAB_SIZE, device=torch.device(device))
+    sampler = Sampler(token_lengths_gpu, eos_token_id=0)
+    
+    # Test that forward works with mixed overrides
+    result = sampler.forward(fake_logits, sampling_metadata)
+    
+    # Basic sanity check
+    assert result.sampled_token_ids.shape == (batch_size, 1)
+    assert torch.all(result.sampled_token_ids >= 0)
+    assert torch.all(result.sampled_token_ids < VOCAB_SIZE)

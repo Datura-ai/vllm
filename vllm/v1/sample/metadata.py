@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
@@ -41,3 +41,6 @@ class SamplingMetadata:
 
     # Loaded logits processors
     logitsprocs: LogitsProcessorManager
+
+    # Additional request parameters from SamplingParams.extra_args
+    extra_args: Optional[dict[str, Any]] = None

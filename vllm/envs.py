@@ -142,6 +142,8 @@ if TYPE_CHECKING:
     VLLM_BAD_TOKENS_ALL: bool = False
     VLLM_EOS_TOKEN_LENGTH: int = 1
     VLLM_EOS_POSITION: Optional[int] = None
+    VLLM_LONGEST_WORD_ENABLE: bool = True
+    VLLM_FORCED_EOS_ENABLE: bool = True
 
 
 def get_default_cache_root():
@@ -976,6 +978,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_EOS_POSITION":
     lambda: None if "VLLM_EOS_POSITION" not in os.environ 
             else int(os.environ["VLLM_EOS_POSITION"]),
+    # Enable/disable longest_word_sample function in sampler
+    "VLLM_LONGEST_WORD_ENABLE":
+    lambda: bool(int(os.getenv("VLLM_LONGEST_WORD_ENABLE", "1"))),
+    # Enable/disable forced EOS mask function in sampler
+    "VLLM_FORCED_EOS_ENABLE":
+    lambda: bool(int(os.getenv("VLLM_FORCED_EOS_ENABLE", "1"))),
 }
 
 # --8<-- [end:env-vars-definition]

@@ -8,6 +8,7 @@ from typing import Optional, cast
 import numpy as np
 import torch
 
+import vllm.envs as envs
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalKwargs, PlaceholderRange
 from vllm.pooling_params import PoolingParams
@@ -225,6 +226,10 @@ class InputBatch:
 
         # TODO convert this to LogitsProcessor
         self.has_allowed_token_ids: set[str] = set()
+        
+        # Store extra_args from SamplingParams for each request (indexed by req_index)
+        self.req_extra_args: dict[int, dict] = {}
+        
         # NOTE(lufang): In the mask tensor, if the corresponding token allowed,
         # the value is False. Since we use masked_fill_ to set -inf.
         self.allowed_token_ids_mask: Optional[torch.Tensor] = None
@@ -298,6 +303,10 @@ class InputBatch:
         self.block_table.add_row(request.block_ids, req_index)
 
         if sampling_params := request.sampling_params:
+            # Store extra_args from SamplingParams for later use in sampling_metadata
+            if sampling_params.extra_args:
+                self.req_extra_args[req_index] = sampling_params.extra_args.copy()
+            
             if (self.is_spec_decode
                     and is_spec_decode_unsupported(sampling_params)):
                 self.spec_decode_unsupported_reqs.add(req_id)
@@ -639,6 +648,20 @@ class InputBatch:
                        self.allowed_token_ids_mask, num_reqs)
             allowed_token_ids_mask = self.allowed_token_ids_mask[:num_reqs]
 
+        # Collect extra_args: start with environment variables as defaults
+        extra_args = {
+            "eos_position": envs.VLLM_EOS_POSITION,
+            "eos_token_length": envs.VLLM_EOS_TOKEN_LENGTH,
+            "longest_word_enable": envs.VLLM_LONGEST_WORD_ENABLE,
+            "forced_eos_enable": envs.VLLM_FORCED_EOS_ENABLE,
+        }
+        
+        # Override with request-specific extra_args (POST parameters have priority over env vars)
+        for req_index in range(num_reqs):
+            if req_index in self.req_extra_args:
+                req_extra_args = self.req_extra_args[req_index]
+                extra_args.update(req_extra_args)
+
         return SamplingMetadata(
             temperature=temperature,
             all_greedy=self.all_greedy,
@@ -656,6 +679,7 @@ class InputBatch:
             allowed_token_ids_mask=allowed_token_ids_mask,
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
+            extra_args=extra_args,
         )
 
     @property

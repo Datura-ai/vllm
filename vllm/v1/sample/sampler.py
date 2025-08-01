@@ -244,21 +244,62 @@ class Sampler(nn.Module):
         #     sampling_metadata.top_p,
         # )   
         #
-        filtered_logits = apply_top_k_top_p(
-            logits,
-            sampling_metadata.top_k,
-            sampling_metadata.top_p,
-        )
 
-        random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
+        # Check if longest word sampling is enabled
+        longest_word_enable = True
+        if sampling_metadata.extra_args:
+            longest_word_enable = sampling_metadata.extra_args.get("longest_word_enable", True)
+            
+        # Log sampling parameters for monitoring and debugging
+        logger.info(f"Sampler parameters: longest_word_enable={longest_word_enable}, "
+                   f"temperature_mean={sampling_metadata.temperature.mean().item() if sampling_metadata.temperature is not None else 'N/A'}, "
+                   f"num_requests={logits.shape[0]}")
+        if sampling_metadata.extra_args:
+            logger.info(f"Extra args: {sampling_metadata.extra_args}")
 
-        force_eos_mask = get_forced_eos_mask(
-            sampling_metadata, self.eos_position, logits.device, filtered_logits
-        )
-        if force_eos_mask is not None:
-            random_sampled = torch.where(force_eos_mask, self.eos_token_id, random_sampled)
+        filtered_logits = None
+        if longest_word_enable:
+            filtered_logits = apply_top_k_top_p(
+                logits,
+                sampling_metadata.top_k,
+                sampling_metadata.top_p,
+            )
+            random_sampled = longest_word_sample(filtered_logits, self.token_lengths_gpu)
+        else:
+            # Use standard random sampling when longest_word_sample is disabled
+            random_sampled = self.topk_topp_sampler(
+                logits,
+                sampling_metadata.generators,
+                sampling_metadata.top_k,
+                sampling_metadata.top_p,
+            )
+
+        # Check if forced EOS is enabled and get EOS position from extra_args
+        forced_eos_enable = True
+        eos_position = self.eos_position
+        if sampling_metadata.extra_args:
+            forced_eos_enable = sampling_metadata.extra_args.get("forced_eos_enable", True)
+            eos_position = sampling_metadata.extra_args.get("eos_position", self.eos_position)
+            
+        # Log EOS forcing parameters
+        logger.info(f"EOS forcing: enabled={forced_eos_enable}, position={eos_position}, "
+                   f"eos_token_id={self.eos_token_id}")
+
+        if forced_eos_enable:
+            force_eos_mask = get_forced_eos_mask(
+                sampling_metadata, eos_position, logits.device, filtered_logits or logits
+            )
+            if force_eos_mask is not None:
+                eos_forced_count = force_eos_mask.sum().item()
+                logger.info(f"EOS forced for {eos_forced_count}/{force_eos_mask.shape[0]} requests")
+                random_sampled = torch.where(force_eos_mask, self.eos_token_id, random_sampled)
+            else:
+                logger.info("No EOS forcing applied (mask is None)")
 
         if greedy_sampled is None:
+            # Log final sampling stats for random-only case
+            unique_tokens = torch.unique(random_sampled).numel()
+            logger.info(f"Final sampling (random-only): {unique_tokens} unique tokens generated")
             return random_sampled
 
         sampled = torch.where(
@@ -267,6 +308,13 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
+        
+        # Log final sampling statistics
+        greedy_count = (sampling_metadata.temperature < _SAMPLING_EPS).sum().item()
+        random_count = logits.shape[0] - greedy_count
+        unique_tokens = torch.unique(sampled).numel()
+        logger.info(f"Final sampling: {greedy_count} greedy, {random_count} random, "
+                   f"{unique_tokens} unique tokens generated")
 
         return sampled
 
